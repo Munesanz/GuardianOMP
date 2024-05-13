@@ -1,0 +1,2 @@
+/home/amunera/llvm-ompss/openmp/CMakeFiles/edit_cache.dir
+/home/amunera/llvm-ompss/openmp/CMakeFiles/rebuild_cache.dir
