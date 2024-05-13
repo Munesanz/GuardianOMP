@@ -1,4 +1,4 @@
-# GuardianOMP
+# GuardianOMP Tool
 
 ## Build LLVM and OpenMP
 (llvm project)
