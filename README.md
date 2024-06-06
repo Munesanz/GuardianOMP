@@ -16,7 +16,7 @@ Execute the following command with the desired installation PATH:
 cd llvm
 mkdir build
 cd build
-cmake -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DCMAKE_INSTALL_PREFIX=${INS_PATH} -DLIBOMP_TASKGRAPH=1 ../llvm
+cmake -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DCMAKE_INSTALL_PREFIX=${INS_PATH} ../llvm
 ninja install
 ```
 
@@ -25,7 +25,7 @@ ninja install
 Fault injector can be compiled as a shared library:
 
 ```sh
-gcc -O2 -shared -fPIC -o fault_injector.so fault_injector.c -lpthread
+gcc -O2 -shared -fPIC -o fault_injector.so fault_injector.c -lpthread -ldl
 ```
 
 First, global data offsets and sizes of a binary can be extracted using "extract_object_file.sh"

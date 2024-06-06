@@ -6893,7 +6893,7 @@ void __kmp_register_library_startup(void) {
 } // func __kmp_register_library_startup
 
 void __kmp_unregister_library(void) {
-  return;
+
   char *name = __kmp_reg_status_name();
   char *value = NULL;
 

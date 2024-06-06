@@ -5268,17 +5268,13 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
   }
 
   int NumReplicas = 0;
-  Expr *VarToReplicate = nullptr;
-  Expr *FuncToCall = nullptr;
-  llvm::Value *OriginalVarPointer = nullptr;
-  llvm::Value *OriginalVarValue = nullptr;
   llvm::Value *GroupID = nullptr;
   ArrayRef<Expr *> DummyVars;
-  OpenMPRedundancyConstraint Constraint = OMPC_REDUNDANCY_CONSTRAINT_none;
+  OpenMPReplicatedKeyword Constraint = OMPC_REPLICATED_KEYWORD_none;
   std::map<llvm::Function *, int> VariantReplicaCount;
   const OMPReplicatedClause *ReplicatedClause;
 
-  if (ReplicatedClause = S.getSingleClause<OMPReplicatedClause>()) {
+  if ((ReplicatedClause = S.getSingleClause<OMPReplicatedClause>())) {
     GroupID = CGM.getOpenMPRuntime().emitGetNewGroupID(*this, S.getBeginLoc());
 
     if(getLangOpts().OpenMPReplicationArch)
@@ -5287,13 +5283,8 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
       NumReplicas = (ReplicatedClause->getNumReplications())
                       ->getIntegerConstantExpr(getContext())
                       ->getZExtValue();
-    VarToReplicate = ReplicatedClause->getVar();
-    FuncToCall = ReplicatedClause->getFunc();
     DummyVars = ReplicatedClause->getDummyVars();
-    Constraint = ReplicatedClause->getRedundancyConstraint();
-    LValue OriginalLValue = EmitLValue(VarToReplicate);
-    OriginalVarPointer = OriginalLValue.getPointer(*this);
-    OriginalVarValue = Builder.CreateLoad(OriginalLValue.getAddress(*this));
+    Constraint = ReplicatedClause->getReplicatedKeyword();
 
     for (Expr *E : DummyVars)
       EmitAutoVarDecl(*cast<VarDecl>(cast<DeclRefExpr>(E)->getDecl()));
@@ -5343,18 +5334,25 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
 
   if (NumReplicas) {
     // Generate multiple tasks
-    for (int i = 0; i < NumReplicas; i++) {
+    for (int i = 0; i < NumReplicas-1; i++) {
 
       std::string VarName = "VariableReplicated_" +
                             std::to_string(S.getID(getContext())) + "_" +
                             std::to_string(i);
 
+      OMPTaskDataTy NewData;
 
-      SmallVector<llvm::Value *,4> AllocatedVars;
-      for (int i=0; i<=ReplicatedClause->getCopyInVars().size(); i++)
-        AllocatedVars.push_back(nullptr);
-      Address CapturedStructCopy = GeneratePrivateCopyCapturedStmtArgument(
-          *CS, VarToReplicate, ReplicatedClause, AllocatedVars);
+      auto CapturedStructCopy = GeneratePrivateCopyCapturedStmtArgument(
+          *CS, ReplicatedClause, S, NewData);
+      NewData.ReplicatedVarName = VarName;
+      NewData.Tied = !S.getSingleClause<OMPUntiedClause>();
+      NewData.IsReplica = true;
+      NewData.GroupID = GroupID;
+      NewData.ReplicaID = i;
+      NewData.PragmaID = S.getID(getContext());
+
+      //Original task should have the information about the processed Vars in replicas
+      Data.ProcessedVars = NewData.ProcessedVars;
 
       auto &&TaskGen = [&S, SharedsTy, IfCond, CapturedStructCopy, &VariantRefs,
                         &VariantReplicaCount, &i,
@@ -5412,7 +5410,7 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
                   VariantReplicaCount[CalledFunction] = VarNumber;
                   // found
                 }
-                if (VarNumber <= VariantFunctions.size())
+                if (VarNumber <= (int) VariantFunctions.size())
                   call->setCalledFunction(VariantFunctions[VarNumber]);
                 else
                   llvm::dbgs()
@@ -5423,21 +5421,11 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
         }
       };
 
-      OMPTaskDataTy NewData;
-
-      NewData.ReplicatedVarName = VarName;
-      NewData.Tied = !S.getSingleClause<OMPUntiedClause>();
-      NewData.IsReplica = true;
-      NewData.GroupID = GroupID;
-      NewData.ReplicaID = i;
-      NewData.PragmaID = S.getID(getContext());
-      NewData.AllocatedVars = AllocatedVars;
-
       int dummyNumber = i + 1;
 
       llvm::Value *FakeAddr = nullptr;
       //When temporal constraint is activated all the replicas use the same dummy var as an out dependency, in order to sequence the execution
-      if (Constraint == OMPC_REDUNDANCY_CONSTRAINT_temporal || Constraint == OMPC_REDUNDANCY_CONSTRAINT_spatial_temporal)
+      if (Constraint == OMPC_REPLICATED_KEYWORD_temporal || Constraint == OMPC_REPLICATED_KEYWORD_spatial_temporal)
         FakeAddr = FirstFakeAddr;
       else
         FakeAddr = CGM.getOpenMPRuntime().emitGetFakeAddrGroupID(*this, S.getBeginLoc());
@@ -5454,26 +5442,18 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
       DDArt.DepExprs.push_back(DummyVars[dummyNumber]);
       DDArt.FakeAddrReplication = FakeAddr;
 
-
       EmitOMPTaskBasedDirective(S, OMPD_task, BodyGen, TaskGen, NewData);
     }
-    //Add fake in dependency on last replica
-    OMPTaskDataTy::DependData &DDArt =
-        ArtificialTaskData.Dependences.emplace_back(OMPC_DEPEND_in, nullptr);
-    DDArt.DepExprs.push_back(VarToReplicate);
-
-    //Generate last replica with empy body and fake dependencies
-    auto &&EmptyBodyGen = [](CodeGenFunction &CGF, PrePostActionTy &) {};
-
-    EmitOMPTaskBasedDirective(S, OMPD_task, EmptyBodyGen, TaskGenOriginal,
-                              ArtificialTaskData);
-    //Emit callback
-    CGM.getOpenMPRuntime().emitTaskReplicasCallback(
-        *this, S.getBeginLoc(), S, FuncToCall, OriginalVarValue, GroupID);
   }
   auto LPCRegion =
       CGOpenMPRuntime::LastprivateConditionalRAII::disable(*this, S);
   EmitOMPTaskBasedDirective(S, OMPD_task, BodyGen, TaskGenOriginal, Data);
+  if(NumReplicas){
+      //Generate last replica with empy body and fake dependencies
+      auto &&EmptyBodyGen = [](CodeGenFunction &CGF, PrePostActionTy &) {};
+      EmitOMPTaskBasedDirective(S, OMPD_task, EmptyBodyGen, TaskGenOriginal,
+                              ArtificialTaskData);
+  }
 }
 
 void CodeGenFunction::EmitOMPTaskyieldDirective(

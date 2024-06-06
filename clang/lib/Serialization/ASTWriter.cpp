@@ -6488,11 +6488,8 @@ void OMPClauseWriter::VisitOMPNumPreallocsClause(OMPNumPreallocsClause *C) {
 
 void OMPClauseWriter::VisitOMPReplicatedClause(OMPReplicatedClause *C) {
   Record.AddStmt(C->getNumReplications());
-  Record.AddStmt(C->getVar());
-  Record.AddStmt(C->getFunc());
   Record.AddSourceLocation(C->getLParenLoc());
-  Record.push_back(C->getRedundancyConstraint());
-  Record.AddStmt(C->getArraySize());
+  Record.push_back(C->getReplicatedKeyword());
 }
 
 void OMPClauseWriter::VisitOMPScheduleClause(OMPScheduleClause *C) {
@@ -6626,6 +6623,29 @@ void OMPClauseWriter::VisitOMPFirstprivateClause(OMPFirstprivateClause *C) {
   for (auto *VE : C->inits()) {
     Record.AddStmt(VE);
   }
+}
+
+void OMPClauseWriter::VisitOMPReplicaFirstprivateClause(OMPReplicaFirstprivateClause *C) {
+    Record.AddSourceLocation(C->getLParenLoc());
+    for (auto *E : C->getVarList()){
+      Record.AddStmt(E);
+    }
+}
+
+void OMPClauseWriter::VisitOMPReplicaPrivateClause(OMPReplicaPrivateClause *C) {
+    Record.AddSourceLocation(C->getLParenLoc());
+    for (auto *E : C->getVarList()){
+      Record.AddStmt(E);
+    }
+}
+
+void OMPClauseWriter::VisitOMPConsolidationClause(OMPConsolidationClause *C) {
+    Record.AddSourceLocation(C->getLParenLoc());
+    for (auto E : C->getVarFunc()){
+      Record.AddStmt(E.first);
+      if(E.second)
+      Record.AddStmt(E.second);
+    }
 }
 
 void OMPClauseWriter::VisitOMPLastprivateClause(OMPLastprivateClause *C) {

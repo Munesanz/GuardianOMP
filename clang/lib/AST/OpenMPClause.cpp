@@ -1782,10 +1782,6 @@ void OMPClausePrinter::VisitOMPNumPreallocsClause(OMPNumPreallocsClause *Node) {
 void OMPClausePrinter::VisitOMPReplicatedClause(OMPReplicatedClause *Node) {
   OS << "replicated(";
   Node->getNumReplications()->printPretty(OS, nullptr, Policy, 0);
-  OS << ",";
-  Node->getVar()->printPretty(OS, nullptr, Policy, 0);
-  OS << ",";
-  Node->getFunc()->printPretty(OS, nullptr, Policy, 0);
   OS << ")";
 }
 
@@ -2085,6 +2081,55 @@ void OMPClausePrinter::VisitOMPFirstprivateClause(OMPFirstprivateClause *Node) {
     VisitOMPClauseList(Node, '(');
     OS << ")";
   }
+}
+
+void OMPClausePrinter::VisitOMPReplicaFirstprivateClause(
+    OMPReplicaFirstprivateClause *Node) {
+  OS << "replica_firstprivate(";
+  int numNodes = Node->getVarList().size();
+  int i = 0;
+  for (auto *E : Node->getVarList()) {
+    E->printPretty(OS, nullptr, Policy, 0);
+    if (i != numNodes - 1) {
+      OS << ",";
+    }
+    i++;
+  }
+  OS << ")";
+}
+
+void OMPClausePrinter::VisitOMPReplicaPrivateClause(
+    OMPReplicaPrivateClause *Node) {
+  OS << "replica_private(";
+  int numNodes = Node->getVarList().size();
+  int i = 0;
+  for (auto *E : Node->getVarList()) {
+    E->printPretty(OS, nullptr, Policy, 0);
+    if (i != numNodes - 1) {
+      OS << ",";
+    }
+    i++;
+  }
+  OS << ")";
+}
+
+void OMPClausePrinter::VisitOMPConsolidationClause(
+    OMPConsolidationClause *Node) {
+  OS << "consolidation(";
+  int numNodes = Node->getVarFunc().size();
+  int i = 0;
+  for (auto E : Node->getVarFunc()) {
+    E.first->printPretty(OS, nullptr, Policy, 0);
+    if(E.second){
+      OS << ":";
+      E.second->printPretty(OS, nullptr, Policy, 0);
+    }
+    if (i != numNodes - 1) {
+      OS << ",";
+    }
+    i++;
+  }
+  OS << ")";
 }
 
 void OMPClausePrinter::VisitOMPLastprivateClause(OMPLastprivateClause *Node) {

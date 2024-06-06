@@ -11915,12 +11915,7 @@ public:
 
   /// Called on well-formed 'replicated' clause.
   OMPClause *ActOnOpenMPReplicatedClause(Expr *NumReplications,
-                                         Expr *Var,
-                                         Expr *Func,
-                                         OpenMPRedundancyConstraint Constraint,
-                                         Expr *ArraySize,
-                                         SmallVector<Expr *, 4> CopyInVars,
-                                         SmallVector<std::pair<Expr *, Expr*>, 4> CopyInArraySizes,
+                                         OpenMPReplicatedKeyword Constraint,
                                          SourceLocation StartLoc,
                                          SourceLocation LParenLoc,
                                          SourceLocation EndLoc);
@@ -12121,6 +12116,23 @@ public:
                                       SourceLocation EndLoc);
   /// Called on well-formed 'firstprivate' clause.
   OMPClause *ActOnOpenMPFirstprivateClause(ArrayRef<Expr *> VarList,
+                                           SourceLocation StartLoc,
+                                           SourceLocation LParenLoc,
+                                           SourceLocation EndLoc);
+
+  OMPClause *ActOnOpenMPReplicaFirstprivateClause(ArrayRef<Expr *> VarList,
+                                           ArrayRef<std::pair<Expr *, Expr *>> VarDeepSizes,
+                                           SourceLocation StartLoc,
+                                           SourceLocation LParenLoc,
+                                           SourceLocation EndLoc);
+
+  OMPClause *ActOnOpenMPConsolidationClause(ArrayRef<std::pair<Expr *, Expr *>> VarFunc,
+                                           SourceLocation StartLoc,
+                                           SourceLocation LParenLoc,
+                                           SourceLocation EndLoc);
+
+  OMPClause *ActOnOpenMPReplicaPrivateClause(ArrayRef<Expr *> VarList,
+                                           ArrayRef<std::pair<Expr *, Expr *>> VarDeepSizes,
                                            SourceLocation StartLoc,
                                            SourceLocation LParenLoc,
                                            SourceLocation EndLoc);

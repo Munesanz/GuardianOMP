@@ -16924,20 +16924,16 @@ OMPClause *Sema::ActOnOpenMPNumPreallocsClause(Expr *NumPreallocs,
       ValExpr, HelperValStmt, CaptureRegion, StartLoc, LParenLoc, EndLoc);
 }
 
-OMPClause *Sema::ActOnOpenMPReplicatedClause(Expr *NumReplications, Expr *Var,
-                                             Expr *Func,
-                                             OpenMPRedundancyConstraint Constraint,
-                                             Expr *ArraySize,
-                                             SmallVector<Expr *, 4> CopyInVars,
-                                             SmallVector<std::pair<Expr *, Expr*>, 4> CopyInArraySizes,
+OMPClause *Sema::ActOnOpenMPReplicatedClause(Expr *NumReplications,
+                                             OpenMPReplicatedKeyword Constraint,
                                              SourceLocation StartLoc,
                                              SourceLocation LParenLoc,
                                              SourceLocation EndLoc) {
 
-  if (Constraint == OMPC_REDUNDANCY_CONSTRAINT_unknown) {
+  if (Constraint == OMPC_REPLICATED_KEYWORD_unknown) {
     Diag(EndLoc, diag::err_omp_unexpected_clause_value)
         << getListOfPossibleValues(OMPC_replicated, /*First=*/0,
-                                   /*Last=*/OMPC_REDUNDANCY_CONSTRAINT_unknown)
+                                   /*Last=*/OMPC_REPLICATED_KEYWORD_unknown)
         << getOpenMPClauseName(OMPC_replicated);
     return nullptr;
   }
@@ -16954,10 +16950,8 @@ OMPClause *Sema::ActOnOpenMPReplicatedClause(Expr *NumReplications, Expr *Var,
     return nullptr;
 
   OMPReplicatedClause *Clause = new (Context)
-      OMPReplicatedClause(ValExpr, Var, Func, Constraint, ArraySize, StartLoc, LParenLoc, EndLoc);
+      OMPReplicatedClause(ValExpr, Constraint, StartLoc, LParenLoc, EndLoc);
 
-  Clause->setCopyInVars(CopyInVars);
-  Clause->setCopyInArraySizes(CopyInArraySizes);
   for (int i = 0; i < NumOfReplicas + 1; i++) {
     VarDecl *VDInit =
         buildVarDecl(*this, ValExpr->getExprLoc(), ValExpr->getType(), "dummy");
@@ -18559,6 +18553,30 @@ OMPClause *Sema::ActOnOpenMPFirstprivateClause(ArrayRef<Expr *> VarList,
   return OMPFirstprivateClause::Create(Context, StartLoc, LParenLoc, EndLoc,
                                        Vars, PrivateCopies, Inits,
                                        buildPreInits(Context, ExprCaptures));
+}
+
+OMPClause *Sema::ActOnOpenMPReplicaFirstprivateClause(
+    ArrayRef<Expr *> VarList, ArrayRef<std::pair<Expr *, Expr *>> VarDeepSizes,
+    SourceLocation StartLoc, SourceLocation LParenLoc, SourceLocation EndLoc) {
+
+  return new (Context) OMPReplicaFirstprivateClause(
+      VarList, VarDeepSizes, StartLoc, LParenLoc, EndLoc);
+}
+
+OMPClause *Sema::ActOnOpenMPReplicaPrivateClause(
+    ArrayRef<Expr *> VarList, ArrayRef<std::pair<Expr *, Expr *>> VarDeepSizes,
+    SourceLocation StartLoc, SourceLocation LParenLoc, SourceLocation EndLoc) {
+
+  return new (Context) OMPReplicaPrivateClause(
+      VarList, VarDeepSizes, StartLoc, LParenLoc, EndLoc);
+}
+
+OMPClause *Sema::ActOnOpenMPConsolidationClause(
+    ArrayRef<std::pair<Expr *, Expr *>> VarFunc,
+    SourceLocation StartLoc, SourceLocation LParenLoc, SourceLocation EndLoc) {
+
+  return new (Context) OMPConsolidationClause(
+      VarFunc, StartLoc, LParenLoc, EndLoc);
 }
 
 OMPClause *Sema::ActOnOpenMPLastprivateClause(

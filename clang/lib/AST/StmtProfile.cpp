@@ -538,12 +538,6 @@ void OMPClauseProfiler::VisitOMPNumPreallocsClause(const OMPNumPreallocsClause *
 void OMPClauseProfiler::VisitOMPReplicatedClause(const OMPReplicatedClause *C) {
   if (C->getNumReplications())
     Profiler->VisitStmt(C->getNumReplications());
-  if(C->getVar())
-    Profiler->VisitStmt(C->getVar());
-  if(C->getFunc())
-    Profiler->VisitStmt(C->getFunc());
-  if(C->getArraySize())
-    Profiler->VisitStmt(C->getArraySize());
 }
 
 void OMPClauseProfiler::VisitOMPUnifiedAddressClause(
@@ -659,6 +653,33 @@ OMPClauseProfiler::VisitOMPFirstprivateClause(const OMPFirstprivateClause *C) {
   for (auto *E : C->inits()) {
     if (E)
       Profiler->VisitStmt(E);
+  }
+}
+void
+OMPClauseProfiler::VisitOMPReplicaFirstprivateClause(const OMPReplicaFirstprivateClause *C) {
+  for (auto *E : C->getVarList()){
+      Profiler->VisitStmt(E);
+  }
+  for (auto E : C->getVarDeepSizes()){
+      Profiler->VisitStmt(E.first);
+      Profiler->VisitStmt(E.second);
+  }
+}
+void
+OMPClauseProfiler::VisitOMPReplicaPrivateClause(const OMPReplicaPrivateClause *C) {
+  for (auto *E : C->getVarList()){
+      Profiler->VisitStmt(E);
+  }
+  for (auto E : C->getVarDeepSizes()){
+      Profiler->VisitStmt(E.first);
+      Profiler->VisitStmt(E.second);
+  }
+}
+void OMPClauseProfiler::VisitOMPConsolidationClause(const OMPConsolidationClause *C) {
+  for (auto E : C->getVarFunc()) {
+      Profiler->VisitStmt(E.first);
+      if (E.second)
+      Profiler->VisitStmt(E.second);
   }
 }
 void

@@ -3682,6 +3682,12 @@ private:
   OMPClause *ParseReplicatedClause(OpenMPDirectiveKind DKind,
                                     OpenMPClauseKind Kind);
 
+  OMPClause *ParseReplicaVarClause(OpenMPDirectiveKind DKind,
+                                                    OpenMPClauseKind Kind);
+
+  OMPClause *ParseConsolidationClause(OpenMPDirectiveKind DKind,
+                                         OpenMPClauseKind Kind);
+
   /// Parses clause with the list of variables of a kind \a Kind.
   ///
   /// \param Kind Kind of current clause.

@@ -1,4 +1,11 @@
 #define _GNU_SOURCE
+
+#if defined(__x86_64__) || defined(__i386__)
+#define ARCH_X86_64
+#elif defined(__aarch64__)
+#define ARCH_ARM64
+#endif
+
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -13,6 +20,12 @@
 #include <sys/user.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#ifdef ARCH_ARM64
+#include <linux/elf.h>
+#include <linux/ptrace.h>
+#include <sys/uio.h>
+#endif
 
 // Define an enum with types of memory
 typedef enum { HEAP_MEMORY, STACK_MEMORY, DATA_MEMORY } MemoryType;
@@ -325,91 +338,97 @@ int get_random_thread_id(int pid) {
   return tids[random_index];
 }
 
-#if defined(__x86_64__) || defined(__i386__)
-#define ARCH_X86_64
-#elif defined(__aarch64__)
-#define ARCH_ARM64
-#endif
-
-void performBitFlipInRandomRegister(pid_t pid, unsigned long current_rsp, PlaceType *place) {
+void performBitFlipInRandomRegister(pid_t pid, unsigned long current_rsp,
+                                    PlaceType *place) {
 #ifdef ARCH_X86_64
-    const int num_registers = 16;
-    char *register_names[] = {
-        "rax", "rbx", "rcx", "rdx", "rsi", "rdi",
-        "rbp", "rsp", "r8", "r9", "r10", "r11",
-        "r12", "r13", "r14", "r15"
-    };
+  struct user_regs_struct regs;
+  const int num_registers = 16;
+  char *register_names[] = {"rax", "rbx", "rcx", "rdx", "rsi", "rdi",
+                            "rbp", "rsp", "r8",  "r9",  "r10", "r11",
+                            "r12", "r13", "r14", "r15"};
 #elif defined(ARCH_ARM64)
-    const int num_registers = 31;
-    char *register_names[] = {
-        "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
-        "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
-        "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23",
-        "x24", "x25", "x26", "x27", "x28", "x29", "x30"
-    };
+  struct user_pt_regs regs;
+  struct iovec io;
+  io.iov_base = &regs;
+  io.iov_len = sizeof(regs);
+  const int num_registers = 33;
+  char *register_names[] = {"x0",  "x1",  "x2",  "x3",  "x4",  "x5",  "x6",
+                            "x7",  "x8",  "x9",  "x10", "x11", "x12", "x13",
+                            "x14", "x15", "x16", "x17", "x18", "x19", "x20",
+                            "x21", "x22", "x23", "x24", "x25", "x26", "x27",
+                            "x28", "x29", "x30", "x31"};
 #endif
 
-    struct user_regs_struct regs;
-    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) == -1) {
-        perror("Failed to get registers");
-        ptrace(PTRACE_DETACH, pid, NULL, NULL);
-        return;
+#ifdef ARCH_X86_64
+  if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) == -1) {
+#elif defined(ARCH_ARM64)
+  if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &io) == -1) {
+#endif
+    perror("Failed to get registers");
+    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    return;
+  }
+
+  unsigned long long *registers[num_registers];
+#ifdef ARCH_X86_64
+  unsigned long long *registers_x86_64[] = {
+      &regs.rax, &regs.rbx, &regs.rcx, &regs.rdx, &regs.rsi, &regs.rdi,
+      &regs.rbp, &regs.rsp, &regs.r8,  &regs.r9,  &regs.r10, &regs.r11,
+      &regs.r12, &regs.r13, &regs.r14, &regs.r15,
+  };
+  memcpy(registers, registers_x86_64, sizeof(registers_x86_64));
+#elif defined(ARCH_ARM64)
+  registers[0] = &regs.sp;
+  for (int i = 1; i < num_registers; i++) {
+    registers[i] = &regs.regs[i - 1];
+  }
+#endif
+
+  const char *env = getenv("REGISTERS");
+  int indices[num_registers];
+  int valid_count = 0;
+
+  if (env && strlen(env) > 0) {
+    char *env_copy = strdup(env);
+    char *token = strtok(env_copy, ",");
+    while (token) {
+      for (int i = 0; i < num_registers; i++) {
+        if (strcmp(token, register_names[i]) == 0) {
+          indices[valid_count++] = i;
+          break;
+        }
+      }
+      token = strtok(NULL, ",");
     }
+    free(env_copy);
+  }
 
-    unsigned long long *registers[num_registers];
-#ifdef ARCH_X86_64
-    unsigned long long *registers_x86_64[] = {
-        &regs.rax, &regs.rbx, &regs.rcx, &regs.rdx, &regs.rsi, &regs.rdi,
-        &regs.rbp, &regs.rsp, &regs.r8, &regs.r9, &regs.r10, &regs.r11,
-        &regs.r12, &regs.r13, &regs.r14, &regs.r15,
-    };
-    memcpy(registers, registers_x86_64, sizeof(registers_x86_64));
-#elif defined(ARCH_ARM64)
+  // If no valid registers are found in the environment, consider all registers
+  if (valid_count == 0) {
     for (int i = 0; i < num_registers; i++) {
-        registers[i] = &regs.regs[i];
+      indices[i] = i;
     }
+    valid_count = num_registers;
+  }
+
+  // Choose a random register from the filtered list and flip a random bit
+  srand(time(NULL)); // Seed the random number generator
+  int reg_index = indices[rand() % valid_count];
+  unsigned long long *selected_reg = registers[reg_index];
+  int bit_position = rand() % (sizeof(unsigned long long) * 8);
+  *selected_reg ^= (1UL << bit_position);
+  printf("Flipped bit %d in register %s\n", bit_position,
+         register_names[reg_index]);
+
+  // Update registers
+#ifdef ARCH_X86_64
+  if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) == -1) {
+#elif defined(ARCH_ARM64)
+  if (ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &io) == -1) {
 #endif
-
-    const char *env = getenv("REGISTERS");
-    int indices[num_registers];
-    int valid_count = 0;
-
-    if (env && strlen(env) > 0) {
-        char *env_copy = strdup(env);
-        char *token = strtok(env_copy, ",");
-        while (token) {
-            for (int i = 0; i < num_registers; i++) {
-                if (strcmp(token, register_names[i]) == 0) {
-                    indices[valid_count++] = i;
-                    break;
-                }
-            }
-            token = strtok(NULL, ",");
-        }
-        free(env_copy);
-    }
-
-    // If no valid registers are found in the environment, consider all registers
-    if (valid_count == 0) {
-        for (int i = 0; i < num_registers; i++) {
-            indices[i] = i;
-        }
-        valid_count = num_registers;
-    }
-
-    // Choose a random register from the filtered list and flip a random bit
-    srand(time(NULL));  // Seed the random number generator
-    int reg_index = indices[rand() % valid_count];
-    unsigned long long *selected_reg = registers[reg_index];
-    int bit_position = rand() % (sizeof(unsigned long long) * 8);
-    *selected_reg ^= (1UL << bit_position);
-    printf("Flipped bit %d in register %s\n", bit_position, register_names[reg_index]);
-
-    // Update registers
-    if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) == -1) {
-        perror("Failed to set registers");
-        ptrace(PTRACE_DETACH, pid, NULL, NULL);
-    }
+    perror("Failed to set registers");
+    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+  }
 }
 
 void performBitFlipInMemory(int bytePosition, pid_t pid, PlaceType *place,
@@ -432,10 +451,8 @@ void performBitFlipInMemory(int bytePosition, pid_t pid, PlaceType *place,
       size_t offset = bytePosition - totalSize;
       targetAddress = (char *)current->address + offset;
 
-      printf(
-          "Bit flipped in address %p in region %s of %ld bytes in place %s \n",
-          targetAddress, getMemoryTypeName(current->type), current->size,
-          getPlaceTypeName(*place));
+      printf("Bit flipped in address %p in region %s of %ld bytes\n",
+             targetAddress, getMemoryTypeName(current->type), current->size);
       long data = ptrace(PTRACE_PEEKDATA, pid, (void *)targetAddress, NULL);
       if (errno) {
         perror("PTRACE_PEEKDATA");
@@ -463,9 +480,15 @@ void performBitFlipInMemory(int bytePosition, pid_t pid, PlaceType *place,
 pid_t new_process;
 int is_child = 0;
 void fork_and_inject() {
+#ifdef ARCH_X86_64
   struct user_regs_struct regs;
+#elif defined(ARCH_ARM64)
+  struct user_pt_regs regs;
+  struct iovec io;
+  io.iov_base = &regs;
+  io.iov_len = sizeof(regs);
+#endif
   pid_t target_pid = get_random_thread_id(getpid());
-
   pid_t pid = fork();
   if (pid == -1) {
     perror("Failed to fork");
@@ -480,17 +503,20 @@ void fork_and_inject() {
 
     waitpid(target_pid, NULL, 0);
 
+#ifdef ARCH_X86_64
     if (ptrace(PTRACE_GETREGS, target_pid, NULL, &regs) == -1) {
+#elif defined(ARCH_ARM64)
+    if (ptrace(PTRACE_GETREGSET, target_pid, NT_PRSTATUS, &io) == -1) {
+#endif
       perror("ptrace getregs");
       ptrace(PTRACE_DETACH, target_pid, NULL, NULL);
       return;
     }
-
     unsigned long current_rsp;
-#if defined(__x86_64__) || defined(__amd64__)
+#ifdef ARCH_X86_64
     current_rsp = regs.rsp;
-#else
-    current_rsp = reread_stackgs.esp;
+#elif defined(ARCH_ARM64)
+    current_rsp = regs.sp;
 #endif
     int mem_data = 1;
     int mem_stack = 1;
@@ -586,7 +612,6 @@ int sleep_random_delay_time() {
 
   // Seed the random number generator
   srand((unsigned)time(NULL));
-
   // Generate a random delay between 0 and maxDelayMs
   int randomDelayMs = rand() % (maxDelayMs + 1);
 
@@ -608,7 +633,6 @@ int sleep_random_delay_time() {
 
 void *pthread_wrapper(void *arg) {
   srand((unsigned int)time(NULL));
-
   // Wait for a random amount of time between 0 and 1 seconds
   if (sleep_random_delay_time()) {
     fork_and_inject(); // Call your original function
@@ -618,7 +642,6 @@ void *pthread_wrapper(void *arg) {
 void initialize() {
   // Enable line-buffering to avoid duplication of standard output when forking
   setvbuf(stdout, NULL, _IOLBF, 0);
-
   pthread_t thread;
   int result = pthread_create(&thread, NULL, pthread_wrapper, NULL);
   if (result != 0) {

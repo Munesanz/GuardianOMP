@@ -2369,9 +2369,6 @@ void OMPClauseEnqueue::VisitOMPNumPreallocsClause(const OMPNumPreallocsClause *C
 
 void OMPClauseEnqueue::VisitOMPReplicatedClause(const OMPReplicatedClause *C) {
   Visitor->AddStmt(C->getNumReplications());
-  Visitor->AddStmt(C->getVar());
-  Visitor->AddStmt(C->getFunc());
-  Visitor->AddStmt(C->getArraySize());
 }
 
 void OMPClauseEnqueue::VisitOMPScheduleClause(const OMPScheduleClause *C) {
@@ -2532,6 +2529,26 @@ void OMPClauseEnqueue::VisitOMPFirstprivateClause(
   }
   for (const auto *E : C->inits()) {
     Visitor->AddStmt(E);
+  }
+}
+void OMPClauseEnqueue::VisitOMPReplicaFirstprivateClause(
+    const OMPReplicaFirstprivateClause *C) {
+  for (auto *E : C->getVarList()) {
+    Visitor->AddStmt(E);
+  }
+}
+void OMPClauseEnqueue::VisitOMPReplicaPrivateClause(
+    const OMPReplicaPrivateClause *C) {
+  for (auto *E : C->getVarList()) {
+    Visitor->AddStmt(E);
+  }
+}
+void OMPClauseEnqueue::VisitOMPConsolidationClause(
+    const OMPConsolidationClause *C) {
+  for (auto E : C->getVarFunc()) {
+    Visitor->AddStmt(E.first);
+    if(E.second)
+    Visitor->AddStmt(E.second);
   }
 }
 void OMPClauseEnqueue::VisitOMPLastprivateClause(

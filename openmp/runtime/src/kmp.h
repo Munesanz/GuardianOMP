@@ -15,7 +15,7 @@
 #define KMP_H
 
 #include "kmp_config.h"
-#include <setjmp.h>
+
 /* #define BUILD_PARALLEL_ORDERED 1 */
 
 /* This fix replaces gettimeofday with clock_gettime for better scalability on
@@ -2531,26 +2531,20 @@ typedef struct kmp_tasking_flags { /* Total struct must be exactly 32 bits */
 #endif
 } kmp_tasking_flags_t;
 
-#if LIBOMP_TASKGRAPH
-//Represents the two types of TDGs
-enum kmp_tdg_type { KMP_DYNAMIC_TDG, KMP_STATIC_TDG };
-//Represents the possible status of the TDG
-enum kmp_tdg_status { KMP_TDG_NONE, KMP_TDG_RECORDING, KMP_TDG_FILL_DATA, KMP_TDG_PREALLOC};
-
 struct ReplicaAllocatedData {
   int pragmaID;
   int replicaID;
   int occupied;
+  int position;
   int size;
   int arraySize;
-  int position;
+  int secondSize;
   void *data;
 };
 
 struct ReplicationNode{
   kmp_task_t *task;
-  void *data;
-  int dataSize;
+  void **data;
   bool finished;
   bool canceled;
   int thread;
@@ -2562,10 +2556,17 @@ struct ReplicationList{
   int numNodes;
   int numNodesSize;
   struct ReplicationNode *nodes;
-  void *functionToCall;
+  void **functionToCall;
   bool callbackExecuted;
+  int numData;
   bool spatialConstraint;
 };
+
+#if LIBOMP_TASKGRAPH
+//Represents the two types of TDGs
+enum kmp_tdg_type { KMP_DYNAMIC_TDG, KMP_STATIC_TDG };
+//Represents the possible status of the TDG
+enum kmp_tdg_status { KMP_TDG_NONE, KMP_TDG_RECORDING, KMP_TDG_FILL_DATA, KMP_TDG_PREALLOC};
 
 //Represents a TDG node
 struct kmp_node_info {
@@ -2739,13 +2740,14 @@ struct kmp_taskdata { /* aligned during dynamic allocation       */
 #if OMPT_SUPPORT
   ompt_task_info_t ompt_task_info;
 #endif
+  //Used for replicas
+  int groupID = 0;
 #if LIBOMP_TASKGRAPH
   //Used to know if the task is created inside a taskgraph
   bool is_taskgraph = 0;
   double duration = 0;
   struct kmp_space_indexer_node *indexer_node;
-  //Used for replicas
-  int groupID = 0;
+
   //Used to associate task with a tdg
   kmp_tdg_info *tdg;
 #endif
@@ -4241,14 +4243,13 @@ KMP_EXPORT void __kmpc_prealloc_tasks(
     kmp_uint32 max_concurrent_tasks, kmp_uint32 task_size,  kmp_uint32 tdg_id);
 KMP_EXPORT kmp_int32 __kmpc_set_task_static_id(kmp_int32 gtid, kmp_task_t *task);
 KMP_EXPORT kmp_uint32 __kmpc_get_taskgraph_id(kmp_task_t *task);
+#endif
 KMP_EXPORT kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref);
 KMP_EXPORT kmp_int64 __kmpc_getFakeAddrGroupID(ident_t *loc_ref);
 KMP_EXPORT kmp_int32 __kmpc_getNewTaskID(ident_t *loc_ref);
-KMP_EXPORT void __kmpc_prepare_taskwait(kmp_task_t *task, void *data,  kmp_int32 dataSize, kmp_int32 groupID, kmp_int32 gtid, bool spatialConstraint);
-KMP_EXPORT void __kmpc_replication_callback(ident_t *loc_ref, void *callbackFunction, kmp_int32 groupID, kmp_int32 threadID);
-KMP_EXPORT void *__kmpc_set_replicate_variable(void *original, kmp_int64 pragma_id, kmp_int32 replica_id, kmp_int32 size, kmp_int64 arraySize, kmp_int64 secondSize, kmp_int32 position);
+KMP_EXPORT void __kmpc_prepare_taskwait(kmp_task_t *task, void **data, void **callback, int num_data, kmp_int32 groupID, kmp_int32 gtid, bool spatialConstraint);
+KMP_EXPORT void *__kmpc_set_replicate_variable(void *original, kmp_int64 pragma_id, kmp_int32 replica_id, kmp_int32 size, kmp_int64 arraySize, kmp_int64 secondSize, kmp_int32 position, int copy);
 KMP_EXPORT void *__kmpc_get_replicate_variable(kmp_int64 pragma_id, kmp_int32 replica_id, kmp_int32 position);
-#endif
 KMP_EXPORT kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants,
                                             kmp_int32 *user_conditions, kmp_int32 replicaId);
 

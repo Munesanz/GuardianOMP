@@ -148,10 +148,10 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind, StringRef Str,
 #include "clang/Basic/OpenMPKinds.def"
         .Default(OMPC_TDG_TYPE_unknown);
   case OMPC_replicated:
-    return llvm::StringSwitch<OpenMPRedundancyConstraint>(Str)
-#define OPENMP_REDUNDANCY_CONSTRAINT(Name) .Case(#Name, OMPC_REDUNDANCY_CONSTRAINT_##Name)
+    return llvm::StringSwitch<OpenMPReplicatedKeyword>(Str)
+#define OPENMP_REPLICATED_KEYWORD(Name) .Case(#Name, OMPC_REPLICATED_KEYWORD_##Name)
 #include "clang/Basic/OpenMPKinds.def"
-        .Default(OMPC_REDUNDANCY_CONSTRAINT_unknown);
+        .Default(OMPC_REPLICATED_KEYWORD_unknown);
   case OMPC_adjust_args:
     return llvm::StringSwitch<OpenMPAdjustArgsOpKind>(Str)
 #define OPENMP_ADJUST_ARGS_KIND(Name) .Case(#Name, OMPC_ADJUST_ARGS_##Name)
@@ -281,10 +281,10 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
     llvm_unreachable("Invalid OpenMP 'tdg_type' clause type");
   case OMPC_replicated:
     switch (Type) {
-    case OMPC_REDUNDANCY_CONSTRAINT_unknown:
+    case OMPC_REPLICATED_KEYWORD_unknown:
       return "unknown";
-#define OPENMP_REDUNDANCY_CONSTRAINT(Name)                                     \
-  case OMPC_REDUNDANCY_CONSTRAINT_##Name:                                      \
+#define OPENMP_REPLICATED_KEYWORD(Name)                                     \
+  case OMPC_REPLICATED_KEYWORD_##Name:                                      \
     return #Name;
 #include "clang/Basic/OpenMPKinds.def"
     }

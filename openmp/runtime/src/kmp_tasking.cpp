@@ -28,44 +28,11 @@
 #define USER_CONDITION 50
 
 #include <signal.h>
+#include <setjmp.h>
 
 __thread sigjmp_buf recover_env;
 __thread int signal_active=0;
 
-__thread uint64_t r12_value;
-__thread uint64_t r11_value;
-__thread uint64_t r10_value;
-__thread uint64_t r9_value;
-
-// Function to save the value of r11
-void save_r11() {
-    __asm__ volatile("mov %%r12, %0" : "=r" (r12_value));
-    __asm__ volatile("mov %%r11, %0" : "=r" (r11_value));
-    __asm__ volatile("mov %%r10, %0" : "=r" (r10_value));
-    __asm__ volatile("mov %%r9, %0" : "=r" (r9_value));
-}
-// Function to restore the value of r11
-void restore_r11() {
-    __asm__ volatile("mov %0, %%r12" : : "r" (r12_value));
-    __asm__ volatile("mov %0, %%r11" : : "r" (r11_value));
-    __asm__ volatile("mov %0, %%r10" : : "r" (r10_value));
-    __asm__ volatile("mov %0, %%r9" : : "r" (r9_value));
-}
-
-template <bool ompt>
-static void __kmp_task_finish(kmp_int32 gtid, kmp_task_t *task,
-                              kmp_taskdata_t *resumed_task);
-void segfault_sigaction(int s) {
-    if(signal_active){
-    printf("Caught segfault at thread %d , try to recover.. \n", __kmp_get_tid());
-    siglongjmp(recover_env, 1);
-    }
-    else{
-      printf("Impossible to recover\n");
-      signal(SIGSEGV, SIG_DFL);
-      signal(SIGBUS, SIG_DFL);
-    }
-}
 //For taskloop
 kmp_int32 taskloop_task_id = 0;
 kmp_bootstrap_lock_t task_id_lock =
@@ -107,7 +74,19 @@ kmp_futex_lock_t ReplicasDataLock =
 
 //Atomic counter to manage groupIDs generation
 std::atomic<kmp_int32> GroupIdCounter = ATOMIC_VAR_INIT(1);
-std::atomic<kmp_int64> FakeAddrCounter = ATOMIC_VAR_INIT(1000);
+std::atomic<kmp_int32> FakeAddrCounter = ATOMIC_VAR_INIT(1000);
+
+void segfault_sigaction(int s) {
+  if (signal_active) {
+    printf("Caught segfault at thread %d , try to recover.. \n",
+           __kmp_get_tid());
+    siglongjmp(recover_env, 1);
+  } else {
+    printf("Impossible to recover\n");
+    signal(SIGSEGV, SIG_DFL);
+    signal(SIGBUS, SIG_DFL);
+  }
+}
 
 #if ENABLE_LIBOMPTARGET
 // Declaration of synchronization function from libomptarget.
@@ -1164,7 +1143,7 @@ static void __kmp_task_finish(kmp_int32 gtid, kmp_task_t *task,
 
   // Free redundant node here, to avoid execute the callback after the taskwait
   // Canceled tasks do not execute the free
-  #if LIBOMP_TASKGRAPH
+#if LIBOMP_TASKGRAPH
   if (taskdata->groupID > 0) {
     if (!taskdata->is_taskgraph) {
       freeReplicatedNode(task, taskdata->groupID, gtid);
@@ -1177,7 +1156,11 @@ static void __kmp_task_finish(kmp_int32 gtid, kmp_task_t *task,
     is_taskgraph = 0;
   else
     is_taskgraph = 1;
- #endif
+#else
+  if (taskdata->groupID > 0) {
+    freeReplicatedNode(task, taskdata->groupID, gtid);
+  }
+#endif
 // Pop task from stack if tied
 #ifdef BUILD_TIED_TASK_STACK
   if (taskdata->td_flags.tiedness == TASK_TIED) {
@@ -1876,6 +1859,7 @@ kmp_uint32 __kmpc_get_taskgraph_id(kmp_task_t *task) {
     return taskdata->tdg->tdgId;
   return -1;
 }
+#endif
 
 kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref) {
   int id = KMP_ATOMIC_INC(&GroupIdCounter);
@@ -1883,7 +1867,7 @@ kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref) {
 }
 
 kmp_int64 __kmpc_getFakeAddrGroupID(ident_t *loc_ref) {
-  kmp_int64 id = KMP_ATOMIC_ADD(&FakeAddrCounter, 4);
+  int id = KMP_ATOMIC_ADD(&FakeAddrCounter, 4);
   return id;
 }
 
@@ -1923,14 +1907,12 @@ bool checkRedundantTaskSpatialConstraint(kmp_int32 groupID, kmp_int32 gtid) {
   return true;
 }
 
-void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 dataSize,
-                             kmp_int32 groupID, kmp_int32 gtid,
-                             bool spatialConstraint) {
+void __kmpc_prepare_taskwait(kmp_task_t *task, void **data, void **callback, int num_data, kmp_int32 groupID,
+                             kmp_int32 gtid, bool spatialConstraint) {
 
   __kmp_acquire_futex_lock(&ReplicationsLock, gtid);
   signal(SIGSEGV, segfault_sigaction);
   signal(SIGBUS, segfault_sigaction);
-
   // Initialize the list if it is not created
   if (!NumReplicasListSize) {
     // printf("--- Runtime ---:Initialize list of lists \n");
@@ -1939,7 +1921,7 @@ void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 dataSize,
     NumReplicasListSize = InitalNumOfLists;
     for (int i = 0; i < InitalNumOfLists; i++) {
       listsOfReplicas[i] = {
-          -1, 0, 0, nullptr, nullptr, FALSE, spatialConstraint};
+          -1, 0, 0, nullptr, nullptr, 0, FALSE, spatialConstraint};
     }
   }
   // Increment the list size if it is not enough
@@ -1958,7 +1940,7 @@ void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 dataSize,
     __kmp_free(OldReplicationList);
 
     for (int i = oldSize; i < NumReplicasListSize; i++) {
-      listsOfReplicas[i] = {-1, 0, 0, nullptr, nullptr, FALSE};
+      listsOfReplicas[i] = {-1, 0, 0, nullptr, nullptr, 0, FALSE, spatialConstraint};
     }
   }
 
@@ -1986,11 +1968,12 @@ void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 dataSize,
   // Find if we need to initialize the list
   if (!ListToUse->numNodesSize) {
     // printf("--- Runtime ---:Initialize list of groupID %d \n", groupID);
+    ListToUse->functionToCall = callback;
     ListToUse->nodes = (ReplicationNode *)__kmp_allocate(
         sizeof(ReplicationNode) * InitalNumOfLists);
     ListToUse->numNodesSize = InitalNumOfLists;
     for (int i = 0; i < ListToUse->numNodesSize; i++) {
-      ListToUse->nodes[i] = {nullptr, nullptr, -1, FALSE, FALSE, -1, -1};
+      ListToUse->nodes[i] = {nullptr, nullptr, FALSE, FALSE, -1, -1};
     }
   }
   // Increment the list size if it is not enough
@@ -2009,12 +1992,15 @@ void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 dataSize,
     __kmp_free(oldNodeList);
 
     for (int i = oldSize; i < ListToUse->numNodesSize; i++) {
-      ListToUse->nodes[i] = {nullptr, nullptr, -1, FALSE, FALSE, -1, -1};
+      ListToUse->nodes[i] = {nullptr, nullptr, FALSE, FALSE, -1, -1};
     }
   }
   // Save node and increment the number of nodes
-  ListToUse->nodes[ListToUse->numNodes] = {task, data, dataSize, FALSE, FALSE, -1, -1};
+  ListToUse->nodes[ListToUse->numNodes] = {task, data, FALSE, FALSE, -1, -1};
+  ListToUse->functionToCall = callback;
   ListToUse->numNodes = ListToUse->numNodes + 1;
+  ListToUse->numData = num_data;
+
   // printf("--- Runtime ---:Node saved! \n");
   if ((spatialConstraint && !__kmp_threads[gtid]->th.th_task_team) ||
       (spatialConstraint && __kmp_threads[gtid]->th.th_task_team->tt.tt_nproc <=
@@ -2044,12 +2030,12 @@ int finishedWithCorrectResult(ReplicationList *list, int nodeID) {
   if (list->nodes[nodeID].correctResult != -1)
     return list->nodes[nodeID].correctResult;
 
-  bool originalFinished = list->nodes[0].finished;
+  bool originalFinished = list->nodes[list->numNodes-1].finished;
   // If original task already finished and node is a replica, then call the user
   // function and return if the result is correct
   if (originalFinished && nodeID != 0) {
     int result = ((int (*)(void *, void *))list->functionToCall)(
-        list->nodes[0].data, list->nodes[nodeID].data);
+        list->nodes[list->numNodes-1].data, list->nodes[nodeID].data);
 
     // If the return value of the user function does not match true or false,
     // then force it to be false, since no other option is supported
@@ -2072,7 +2058,7 @@ int finishedWithCorrectResult(ReplicationList *list, int nodeID) {
       if (list->nodes[j].finished == TRUE &&
           list->nodes[j].correctResult == -1) {
         int result = ((int (*)(void *, void *))list->functionToCall)(
-            list->nodes[0].data, list->nodes[j].data);
+            list->nodes[list->numNodes-1].data, list->nodes[j].data);
         // If the return value of the user function does not match true or
         // false, then force it to be false, since no other option is supported
         if (result != 0 && result != 1)
@@ -2130,36 +2116,95 @@ bool checkIfListIsFinished(int gtid, ReplicationList *list) {
   return false;
 }
 
+int getcpySize(void *data){
+  for (int i = 0; i < numAllocatedReplicasDataSize; i++) {
+    if (replicasAllocatedData[i].data == data) {
+      return replicasAllocatedData[i].size;
+    }
+  }
+  return -1;
+}
+
+int memcmpData(void *first, void *second) {
+  int size = 0;
+  int arraySize, secondSize;
+  for (int i = 0; i < numAllocatedReplicasDataSize; i++) {
+    if (replicasAllocatedData[i].data == first ||
+        replicasAllocatedData[i].data == second) {
+      size = replicasAllocatedData[i].size;
+      arraySize = replicasAllocatedData[i].arraySize;
+      secondSize = replicasAllocatedData[i].secondSize;
+    }
+  }
+  if (!size) {
+    printf("Error: Data for byte to byte comparison not found\n");
+    return -1;
+  }
+  if (!arraySize && !secondSize) {
+    return memcmp(first, second, size);
+  } else if (!secondSize) {
+    void **firstArray = (void **)first;
+    void **secondArray = (void **)second;
+    return memcmp(*firstArray, *secondArray, arraySize);
+  } else {
+    for (int i = 0; i < (int)(arraySize / sizeof(void *)); i++) {
+      void ***firstArray = (void ***) first;
+      void ***secondArray = (void ***) second;
+      if((*firstArray)[i] == nullptr || (*secondArray)[i]==nullptr)
+        continue;
+      int result = memcmp((*firstArray)[i], (*secondArray)[i], secondSize);
+      if (result!=0)
+        return -1;
+    }
+  }
+  return 0;
+}
+
 void executeCallbackAndFreeList(ReplicationList *list) {
   // Call function comparing with the data of the original
-  int *score = (int *)malloc(sizeof(int) * list->numNodes);
-  memset(score, 0, sizeof(int) * list->numNodes);
-  signal_active=1;
-  for (int i = 0; i < list->numNodes; i++) {
-    for (int j = i + 1; j < list->numNodes; j++) {
-      if (list->nodes[i].canceled == TRUE || list->nodes[i].correctResult != -1)
-        continue;
-      if (sigsetjmp(recover_env, 1) == 0) {
-        int result = ((int (*)(void *, void *))list->functionToCall)(
-            list->nodes[i].data, list->nodes[j].data);
-        score[i] += result;
-        score[j] += result;
+  int *nodeSelected = (int *)malloc(sizeof(int) * list->numData);
+  for (int z = 0; z < list->numData; z++) {
+    int *score = (int *)malloc(sizeof(int) * list->numNodes);
+    memset(score, 0, sizeof(int) * list->numNodes);
+    signal_active=1;
+    for (int i = 0; i < list->numNodes; i++) {
+      for (int j = i + 1; j < list->numNodes; j++) {
+        if (list->nodes[i].canceled == TRUE ||
+            list->nodes[i].correctResult != -1)
+          continue;
+        int result;
+        if (sigsetjmp(recover_env, 1) == 0) {
+          if (list->functionToCall[z] == nullptr) {
+            result =
+                !memcmpData(list->nodes[i].data[z], list->nodes[j].data[z]);
+          } else {
+            result = ((int (*)(void *, void *))list->functionToCall[z])(
+                list->nodes[i].data[z], list->nodes[j].data[z]);
+          }
+          score[i] += result;
+          score[j] += result;
+        }
       }
     }
-  }
-  signal_active=0;
-  int max_score = 0;
-  int node = 0;
-  for (int i = 0; i < list->numNodes; i++) {
-    if(score[i] > max_score){
-      max_score = score[i];
-      node = i;
+    signal_active=0;
+
+    int max_score = 0;
+    int node = 0;
+    for (int i = list->numNodes -1 ; i >= 0; i--) {
+      if (score[i] > max_score) {
+        max_score = score[i];
+        node = i;
+      }
     }
-  }
-  //Original task may have a wrong result, copy from a node with higher score
-  if(node!=0){
-    printf("Original task containes erroneous result, recovering..\n");
-    memcpy(list->nodes[0].data, list->nodes[node].data, list->nodes[0].dataSize);
+    nodeSelected[z]= node;
+    // Original task may have a wrong result, copy from a node with higher score
+    if (node != list->numNodes - 1) {
+      printf("Original task containes erroneous result, recovering..\n");
+      int size = getcpySize(list->nodes[node].data[z]);
+      if (size)
+        memcpy(list->nodes[list->numNodes -1].data[z], list->nodes[node].data[z], size);
+    }
+    free(score);
   }
   // Reset list and nodes
   list->callbackExecuted = TRUE;
@@ -2170,8 +2215,9 @@ void executeCallbackAndFreeList(ReplicationList *list) {
   for (int j = 0; j < list->numNodes; j++) {
     list->nodes[j].task = nullptr;
     //Free replica's data
-    if(j<  list->numNodes - 1 && j!=node){
-      free(list->nodes[j].data);
+    for(int z=0; z < list->numData; z++){
+      if(j<  list->numNodes - 1 && j!= nodeSelected[z])
+       free(list->nodes[j].data[z]);
     }
     list->nodes[j].finished = FALSE;
     list->nodes[j].canceled = FALSE;
@@ -2203,13 +2249,35 @@ void disableReplicatedNode(kmp_task_t *task, int groupID, kmp_int32 gtid) {
       if (executeCallback && listsOfReplicas[i].functionToCall != nullptr) {
         // printf("--- Runtime ---:Executing callback normal TDG! \n");
         //  Call function comparing with the data of the original
-        for (int z = 1; z < listsOfReplicas[i].numNodes; z++) {
-          if (listsOfReplicas->nodes[z].canceled == TRUE ||
-              listsOfReplicas->nodes[z].correctResult != -1)
-            continue;
-          ((void (*)(void *, void *))listsOfReplicas[i].functionToCall)(
-              listsOfReplicas[i].nodes[0].data,
-              listsOfReplicas[i].nodes[z].data);
+        int *score = (int *)malloc(sizeof(int) * listsOfReplicas[i].numNodes);
+        memset(score, 0, sizeof(int) * listsOfReplicas[i].numNodes);
+        for (int i = 0; i < listsOfReplicas[i].numNodes; i++) {
+          for (int j = i + 1; j < listsOfReplicas[i].numNodes; j++) {
+            if (listsOfReplicas[i].nodes[i].canceled == TRUE ||
+                listsOfReplicas[i].nodes[i].correctResult != -1)
+              continue;
+            // if (sigsetjmp(recover_env, 1) == 0) {
+            int result = ((int (*)(void *, void *))listsOfReplicas[i].functionToCall)(
+                listsOfReplicas[i].nodes[i].data, listsOfReplicas[i].nodes[j].data);
+            score[i] += result;
+            score[j] += result;
+            //}
+          }
+        }
+        int max_score = 0;
+        int node = 0;
+        for (int i = 0; i < listsOfReplicas[i].numNodes; i++) {
+          if (score[i] > max_score) {
+            max_score = score[i];
+            node = i;
+          }
+        }
+        // Original task may have a wrong result, copy from a node with higher
+        // score
+        if (node != 0) {
+          // printf("Original task containes erroneous result, recovering..\n");
+          // memcpy(list->nodes[0].data, list->nodes[node].data,
+          // list->nodes[0].dataSize);
         }
         // Only reset status
         for (int j = 0; j < listsOfReplicas[i].numNodesSize; j++) {
@@ -2228,7 +2296,6 @@ void disableReplicatedNode(kmp_task_t *task, int groupID, kmp_int32 gtid) {
 // When not in taskgraph, we free the data
 void freeReplicatedNode(kmp_task_t *task, int groupID, kmp_int32 gtid) {
   __kmp_acquire_futex_lock(&ReplicationsLock, gtid);
-
   // First, look for the list of the group
   for (int i = 0; i < NumReplicasListSize; i++) {
     if (listsOfReplicas[i].groupID == groupID) {
@@ -2253,48 +2320,8 @@ void freeReplicatedNode(kmp_task_t *task, int groupID, kmp_int32 gtid) {
   __kmp_release_futex_lock(&ReplicationsLock, gtid);
 }
 
-// TODO: async or sync?
-void __kmpc_replication_callback(ident_t *loc_ref, void *callbackFunction,
-                                 kmp_int32 groupID, kmp_int32 gtid) {
-  __kmp_acquire_futex_lock(&ReplicationsLock, gtid);
-  for (int i = 0; i < NumReplicasListSize; i++) {
-    // Find the list with the GroupID and update callback
-    if (listsOfReplicas[i].groupID == groupID) {
-      listsOfReplicas[i].functionToCall = callbackFunction;
-      // Now check if all nodes of the list has finished
-      bool executeCallback = checkIfListIsFinished(gtid, &listsOfReplicas[i]);
-
-      if (executeCallback) {
-        // If the original task is finished and the task pointer is not nullptr
-        // we may be in a taskgraph!
-        if (listsOfReplicas[i].nodes[0].task != nullptr &&
-            KMP_TASK_TO_TASKDATA(listsOfReplicas[i].nodes[0].task)->is_taskgraph == 1) {
-          //  Call function comparing with the data of the original
-          for (int z = 1; z < listsOfReplicas[i].numNodes; z++) {
-            if (listsOfReplicas->nodes[z].canceled == TRUE ||
-                listsOfReplicas->nodes[z].correctResult != -1)
-              continue;
-            ((void (*)(void *, void *))listsOfReplicas[i].functionToCall)(
-                listsOfReplicas[i].nodes[0].data,
-                listsOfReplicas[i].nodes[z].data);
-          }
-          // Only reset status
-          for (int j = 0; j < listsOfReplicas[i].numNodesSize; j++) {
-            listsOfReplicas[i].nodes[j].finished = FALSE;
-            listsOfReplicas[i].nodes[j].canceled = FALSE;
-            listsOfReplicas[i].nodes[j].thread = -1;
-            listsOfReplicas[i].nodes[j].correctResult = -1;
-          }
-        } else
-          executeCallbackAndFreeList(&listsOfReplicas[i]);
-      }
-    }
-  }
-  __kmp_release_futex_lock(&ReplicationsLock, gtid);
-}
-
 void *__kmpc_set_replicate_variable(void *original, kmp_int64 pragmaID,
-                                    kmp_int32 replicaID, kmp_int32 size, kmp_int64 arraySize, kmp_int64 secondSize, kmp_int32 position) {
+                                    kmp_int32 replicaID, kmp_int32 size, kmp_int64 arraySize, kmp_int64 secondSize, kmp_int32 position, int copy) {
   __kmp_acquire_futex_lock(&ReplicasDataLock, 0);
   if (!numAllocatedReplicasDataSize) {
     replicasAllocatedData = (struct ReplicaAllocatedData *)malloc(
@@ -2320,23 +2347,28 @@ void *__kmpc_set_replicate_variable(void *original, kmp_int64 pragmaID,
     if (replicasAllocatedData[i].pragmaID == -1) {
       replicasAllocatedData[i].pragmaID = pragmaID;
       replicasAllocatedData[i].replicaID = replicaID;
+      replicasAllocatedData[i].position = position;
       replicasAllocatedData[i].size = size;
       replicasAllocatedData[i].arraySize = arraySize;
-      replicasAllocatedData[i].position = position;
+      replicasAllocatedData[i].secondSize = secondSize;
       void *newAllocatedData = (void *)malloc(size);
-      memcpy(newAllocatedData, original, size);
-      if(arraySize){
-          void **arrayPointer = (void **) newAllocatedData;
-          void **originalArrayPointer = (void **) original;
-          *arrayPointer = (void *)malloc(arraySize);
+      if (copy)
+        memcpy(newAllocatedData, original, size);
+      if (arraySize) {
+        void **arrayPointer = (void **)newAllocatedData;
+        void **originalArrayPointer = (void **)original;
+        *arrayPointer = (void *)malloc(arraySize);
+        if (copy)
           memcpy(*arrayPointer, *originalArrayPointer, arraySize);
-        if(secondSize){
-          for(int i=0; i<(arraySize/sizeof(void *));i++){
-            void **secondArrayPointer =  (void **) *arrayPointer;
-            void **secondOriginalArrayPointer = (void **) *originalArrayPointer;
-            if(secondOriginalArrayPointer[i]!=NULL){
+        if (secondSize) {
+          for (int i = 0; i < (int) (arraySize / sizeof(void *)); i++) {
+            void **secondArrayPointer = (void **)*arrayPointer;
+            void **secondOriginalArrayPointer = (void **)*originalArrayPointer;
+            if (secondOriginalArrayPointer[i] != NULL) {
               secondArrayPointer[i] = (void *)malloc(secondSize);
-              memcpy(secondArrayPointer[i], secondOriginalArrayPointer[i], secondSize);
+              if (copy)
+                memcpy(secondArrayPointer[i], secondOriginalArrayPointer[i],
+                       secondSize);
             }
           }
         }
@@ -2350,23 +2382,22 @@ void *__kmpc_set_replicate_variable(void *original, kmp_int64 pragmaID,
   return nullptr;
 }
 
-void *__kmpc_get_replicate_variable(kmp_int64 pragmaID, kmp_int32 replicaID, kmp_int32 position) {
+void *__kmpc_get_replicate_variable(kmp_int64 pragmaID, kmp_int32 replicaID,
+                                    kmp_int32 position) {
   __kmp_acquire_futex_lock(&ReplicasDataLock, 0);
   for (int i = 0; i < numAllocatedReplicasDataSize; i++) {
     if (replicasAllocatedData[i].pragmaID == pragmaID &&
         replicasAllocatedData[i].occupied == 0 &&
         replicasAllocatedData[i].replicaID == replicaID &&
-        replicasAllocatedData[i].position == position
-        ) {
+        replicasAllocatedData[i].position == position) {
       replicasAllocatedData[i].occupied = 1;
       __kmp_release_futex_lock(&ReplicasDataLock, 0);
       return replicasAllocatedData[i].data;
     }
   }
+  __kmp_release_futex_lock(&ReplicasDataLock, 0);
   return nullptr;
 }
-
-#endif
 
 int GetRamFreePercentage(void) {
   FILE *meminfo = fopen("/proc/meminfo", "r");
@@ -2484,7 +2515,6 @@ task''
 This entry registers the affinity information attached to a task with the task
 thunk structure kmp_taskdata_t.
 */
-
 kmp_int32
 __kmpc_omp_reg_task_with_affinity(ident_t *loc_ref, kmp_int32 gtid,
                                   kmp_task_t *new_task, kmp_int32 naffins,
@@ -2651,14 +2681,10 @@ static void __kmp_invoke_task(kmp_int32 gtid, kmp_task_t *task,
       __tgt_target_nowait_query(&taskdata->td_target_data.async_handle);
     } else
 #endif
-#if LIBOMP_TASKGRAPH
-        if (task->routine != NULL && taskdata->groupID != -1)
-#else
-    if (task->routine != NULL)
-#endif
+    if (task->routine != NULL && taskdata->groupID != -1)
     {
-      if (taskdata->groupID != -1 && thread) {
-        signal_active=1;
+      if (taskdata->groupID > 0 && thread) {
+        signal_active = 1;
         if (sigsetjmp(recover_env, 0) == 0) {
 #ifdef KMP_GOMP_COMPAT
           if (taskdata->td_flags.native) {
@@ -2668,10 +2694,10 @@ static void __kmp_invoke_task(kmp_int32 gtid, kmp_task_t *task,
           {
             (*(task->routine))(gtid, task);
           }
-          longjmp(recover_env,1);
+          longjmp(recover_env, 1);
         } else {
-          //printf("Recovering from a faulting task \n");
-          signal_active=0;
+          // printf("Recovering from a faulting task \n");
+          signal_active = 0;
         }
       } else {
 #ifdef KMP_GOMP_COMPAT

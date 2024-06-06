@@ -3414,6 +3414,12 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
   case OMPC_replicated:
     Clause = ParseReplicatedClause(DKind, CKind);
     break;
+  case OMPC_replica_private:
+  case OMPC_replica_firstprivate:
+    Clause = ParseReplicaVarClause(DKind, CKind);
+    break;
+  case OMPC_consolidation:
+    Clause = ParseConsolidationClause(DKind, CKind);
   default:
     break;
   }
@@ -4311,76 +4317,57 @@ OMPClause *Parser::ParseReplicatedClause(OpenMPDirectiveKind DKind,
                          getOpenMPClauseName(Kind).data()))
     return nullptr;
 
-  OpenMPRedundancyConstraint Constraint = OMPC_REDUNDANCY_CONSTRAINT_none;
-  SmallVector<Expr *, 3> Vars;
-  SmallVector<Expr *, 4> CopyInVars;
-  SmallVector<std::pair<Expr *, Expr*>, 4> CopyInArraySizes;
-
-  Expr *ArraySize = nullptr;
-  int NumVars = 0;
-  while ((Tok.isNot(tok::r_paren) &&
+  OpenMPReplicatedKeyword Constraint = OMPC_REPLICATED_KEYWORD_none;
+  Expr *NumReplicas = 0;
+  int NumArguments = 0;
+  SmallVector<Expr *, 4> funcs;
+  while ((Tok.isNot(tok::r_paren) && Tok.isNot(tok::colon) &&
           Tok.isNot(tok::annot_pragma_openmp_end))) {
     ParseScope OMPListScope(this, Scope::OpenMPDirectiveScope);
     ColonProtectionRAIIObject ColonRAII(*this, false);
+    if (Tok.is(tok::identifier) && NumArguments ==1 && static_cast<OpenMPReplicatedKeyword>(getOpenMPSimpleClauseType(
+              Kind, PP.getSpelling(Tok), getLangOpts())) == 4) {
+        ConsumeToken();
+        ExpectAndConsume(tok::equal);
+        ExpectAndConsume(tok::l_brace);
+        while (Tok.isNot(tok::r_brace)) {
+          ExprResult FuncExpr =
+              Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
+          if (FuncExpr.isUsable()) {
+            Expr *Func = FuncExpr.get();
+            if (!Func->getType().getTypePtr()->isFunctionType()) {
+              Diag(Tok.getLocation(), diag::err_expected)
+                  << "function inside the list of variants";
+              return nullptr;
+            }
+            funcs.push_back(Func);
+          } else {
+            // Consume tokens until the next significant punctuation
+            SkipUntil(tok::comma, tok::r_brace, StopBeforeMatch);
+          }
+          bool IsComma = Tok.is(tok::comma);
+          if (IsComma)
+            ConsumeToken();
+          else if (Tok.isNot(tok::r_brace))
+            Diag(Tok.getLocation(), diag::err_expected) << "',' or '}'";
+        }
 
-    if (Tok.is(tok::identifier) && NumVars == 3) {
-      Constraint = static_cast<OpenMPRedundancyConstraint>(
+        // Consume the r_brace
+        ConsumeToken();
+        NumArguments++;
+    } else if (Tok.is(tok::identifier) && NumArguments == 1 && static_cast<OpenMPReplicatedKeyword>(
+          getOpenMPSimpleClauseType(Kind, PP.getSpelling(Tok), getLangOpts())) == 2) {
+
+      Constraint = static_cast<OpenMPReplicatedKeyword>(
           getOpenMPSimpleClauseType(Kind, PP.getSpelling(Tok), getLangOpts()));
       ConsumeToken();
-    } else {
-
-      if (NumVars == 1 && Tok.is(tok::l_square)) {
-        ConsumeAnyToken();
-        ExprResult VarExpr =
-            Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
-        if (VarExpr.isUsable()) {
-          Expr *Var = VarExpr.get();
-          ArraySize = Var;
-        }
-        ExpectAndConsume(tok::r_square);
-      } else if (NumVars == 2 && Tok.is(tok::colon)) {
-        ConsumeAnyToken();
-        SmallVector<Expr *, 4> dimensionSizes;
-        while (Tok.is(tok::l_square)) {
-          ConsumeAnyToken();
-          ExprResult VarExpr =
-              Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
-          if (VarExpr.isUsable()) {
-            Expr *Var = VarExpr.get();
-            dimensionSizes.push_back(Var);
-          }
-          ExpectAndConsume(tok::r_square);
-        }
-        if(dimensionSizes.size() == 2){
-          CopyInArraySizes.push_back(std::make_pair(dimensionSizes[0], dimensionSizes[1]));
-        }
-        else if(dimensionSizes.size() == 1){
-          CopyInArraySizes.push_back(std::make_pair(dimensionSizes[0], nullptr));
-        }
-        else if(dimensionSizes.size() == 0){
-          CopyInArraySizes.push_back(std::make_pair(nullptr, nullptr));
-        } else{
-            Diag(Tok.getLocation(), diag::err_expected)
-                << "only a maximum of two levels of indirection";
-            return nullptr;
-        }
-        ExprResult VarExpr =
-            Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
-        if (VarExpr.isUsable()) {
-          Expr *Var = VarExpr.get();
-          CopyInVars.push_back(Var);
-        }
-        bool IsComma = Tok.is(tok::comma);
-        if (IsComma)
-          ConsumeToken();
-        continue;
-      }
+    } else if (NumArguments==0) {
       // Parse variable
       ExprResult VarExpr =
           Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
       if (VarExpr.isUsable()) {
         Expr *Var = VarExpr.get();
-        if (NumVars == 0) {
+        if (NumArguments == 0) {
           if (!Var->isIntegerConstantExpr(Actions.getASTContext())) {
             Diag(Tok.getLocation(), diag::err_expected)
                 << "constant integer in first argument of replicated clause";
@@ -4388,22 +4375,17 @@ OMPClause *Parser::ParseReplicatedClause(OpenMPDirectiveKind DKind,
           }
           int numReplicas = Var->getIntegerConstantExpr(Actions.getASTContext())
                                 ->getZExtValue();
-          if (numReplicas <= 0) {
+          if (numReplicas <= 1) {
             Diag(Tok.getLocation(), diag::err_expected)
-                << "positive integer in first argument of replicated clause";
+                << "positive integer greater than one in first argument of replicated clause";
             return nullptr;
           }
         }
-        if (NumVars == 2 && !Var->getType().getTypePtr()->isFunctionType()) {
-          Diag(Tok.getLocation(), diag::err_expected)
-              << "function pointer in third argument of replicated clause";
-          return nullptr;
-        }
-        Vars.push_back(Var);
-        NumVars++;
 
+        NumReplicas=Var;
+        NumArguments++;
       } else {
-        SkipUntil({tok::comma, tok::colon, tok::r_paren, tok::annot_pragma_openmp_end},
+        SkipUntil(tok::comma, tok::r_paren, tok::annot_pragma_openmp_end,
                   StopBeforeMatch);
       }
     }
@@ -4411,8 +4393,9 @@ OMPClause *Parser::ParseReplicatedClause(OpenMPDirectiveKind DKind,
     bool IsComma = Tok.is(tok::comma);
     if (IsComma)
       ConsumeToken();
-    else if (Tok.isNot(tok::colon) && Tok.isNot(tok::r_paren) && Tok.isNot(tok::annot_pragma_openmp_end)){
-      Diag(Tok, diag::err_omp_expected_punc) << getOpenMPClauseName(Kind);
+    else if (Tok.isNot(tok::r_paren) && Tok.isNot(tok::annot_pragma_openmp_end)){
+      SkipUntil(tok::comma, tok::r_paren, tok::annot_pragma_openmp_end,
+                  StopBeforeMatch);
     }
   }
   // Parse ')'.
@@ -4420,14 +4403,139 @@ OMPClause *Parser::ParseReplicatedClause(OpenMPDirectiveKind DKind,
   if (!T.consumeClose())
     RLoc = T.getCloseLocation();
 
-  if (Vars.size() == 3) {
-    return Actions.ActOnOpenMPReplicatedClause(Vars[0], Vars[1], Vars[2],
-                                               Constraint, ArraySize, CopyInVars, CopyInArraySizes, Loc, LLoc, RLoc);
+  if (NumArguments > 0) {
+    return Actions.ActOnOpenMPReplicatedClause(NumReplicas, Constraint, Loc, LLoc, RLoc);
   } else {
     Diag(Tok.getLocation(), diag::err_expected)
-        << "three arguments for replicated clause";
+        << "num replicas for replicated clause";
     return nullptr;
   }
+}
+
+OMPClause *Parser::ParseReplicaVarClause(OpenMPDirectiveKind DKind,
+                                         OpenMPClauseKind Kind) {
+  if (DKind != OMPD_task || (Kind != OMPC_replica_firstprivate && Kind != OMPC_replica_private))
+    return nullptr;
+
+  SourceLocation Loc = ConsumeToken();
+  SourceLocation LLoc = Tok.getLocation();
+  SourceLocation RLoc;
+
+  BalancedDelimiterTracker T(*this, tok::l_paren, tok::annot_pragma_openmp_end);
+  if (T.expectAndConsume(diag::err_expected_lparen_after,
+                         getOpenMPClauseName(Kind).data()))
+    return nullptr;
+
+  SmallVector<Expr *> Vars;
+  SmallVector<std::pair<Expr *, Expr *>> VarsDeepSizes;
+  while ((Tok.isNot(tok::r_paren) && Tok.isNot(tok::colon) &&
+          Tok.isNot(tok::annot_pragma_openmp_end))) {
+    ParseScope OMPListScope(this, Scope::OpenMPDirectiveScope);
+    ColonProtectionRAIIObject ColonRAII(*this, false);
+    std::pair<Expr *, Expr *> DimSizes {nullptr, nullptr};
+    int numDimensions = 0;
+    while (Tok.is(tok::l_square)) {
+      ConsumeAnyToken();
+      if (numDimensions > 1) {
+        Diag(Tok.getLocation(), diag::err_expected)
+            << "only a maximum of two levels of indirection";
+      }
+      ExprResult VarExpr =
+          Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
+      if (VarExpr.isUsable()) {
+        Expr *Var = VarExpr.get();
+        if(numDimensions==0)
+          DimSizes.first = Var;
+        else
+          DimSizes.second = Var;
+      }
+      numDimensions++;
+      ExpectAndConsume(tok::r_square);
+    }
+
+    ExprResult VarExpr =
+        Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
+    if (VarExpr.isUsable()) {
+      Expr *Var = VarExpr.get();
+      Vars.push_back(Var);
+      VarsDeepSizes.push_back(DimSizes);
+    }
+
+    // Skip ',' if any
+    bool IsComma = Tok.is(tok::comma);
+    if (IsComma)
+      ConsumeToken();
+    else if (Tok.isNot(tok::r_paren) && Tok.isNot(tok::annot_pragma_openmp_end))
+      Diag(Tok, diag::err_omp_expected_punc) << getOpenMPClauseName(Kind);
+  }
+
+  // Parse ')'.
+  RLoc = Tok.getLocation();
+  if (!T.consumeClose())
+    RLoc = T.getCloseLocation();
+
+  if (Kind == OMPC_replica_firstprivate)
+    return Actions.ActOnOpenMPReplicaFirstprivateClause(Vars, VarsDeepSizes, Loc, LLoc, RLoc);
+  else
+    return Actions.ActOnOpenMPReplicaPrivateClause(Vars, VarsDeepSizes, Loc, LLoc, RLoc);
+}
+
+OMPClause *Parser::ParseConsolidationClause(OpenMPDirectiveKind DKind,
+                                         OpenMPClauseKind Kind) {
+  if (DKind != OMPD_task || Kind != OMPC_consolidation)
+    return nullptr;
+
+  SourceLocation Loc = ConsumeToken();
+  SourceLocation LLoc = Tok.getLocation();
+  SourceLocation RLoc;
+
+  BalancedDelimiterTracker T(*this, tok::l_paren, tok::annot_pragma_openmp_end);
+  if (T.expectAndConsume(diag::err_expected_lparen_after,
+                         getOpenMPClauseName(Kind).data()))
+    return nullptr;
+
+  SmallVector<std::pair<Expr *, Expr *>> VarFunc;
+  while ((Tok.isNot(tok::r_paren) && Tok.isNot(tok::colon) &&
+          Tok.isNot(tok::annot_pragma_openmp_end))) {
+    ParseScope OMPListScope(this, Scope::OpenMPDirectiveScope);
+    ColonProtectionRAIIObject ColonRAII(*this, false);
+    std::pair<Expr *, Expr *> VarFuncPair {nullptr, nullptr};
+
+    ExprResult VarExpr =
+        Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
+    if (VarExpr.isUsable()) {
+      Expr *Var = VarExpr.get();
+      VarFuncPair.first = Var;
+    }
+
+    if (Tok.is(tok::colon)) {
+      ConsumeToken();
+      VarExpr = Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
+      if (VarExpr.isUsable()) {
+        Expr *Var = VarExpr.get();
+        if (!Var->getType().getTypePtr()->isFunctionType()) {
+          Diag(Tok.getLocation(), diag::err_expected)
+              << "function pointer in third argument of consolidation clause";
+          return nullptr;
+        }
+        VarFuncPair.second = Var;
+      }
+    }
+    VarFunc.push_back(VarFuncPair);
+    // Skip ',' if any
+    bool IsComma = Tok.is(tok::comma);
+    if (IsComma)
+      ConsumeToken();
+    else if (Tok.isNot(tok::r_paren) && Tok.isNot(tok::annot_pragma_openmp_end))
+      Diag(Tok, diag::err_omp_expected_punc) << getOpenMPClauseName(Kind);
+  }
+
+  // Parse ')'.
+  RLoc = Tok.getLocation();
+  if (!T.consumeClose())
+    RLoc = T.getCloseLocation();
+
+  return Actions.ActOnOpenMPConsolidationClause(VarFunc, Loc, LLoc, RLoc);
 }
 
 bool Parser::ParseOpenMPReservedLocator(OpenMPClauseKind Kind,

@@ -2035,16 +2035,11 @@ public:
   /// By default, performs semantic analysis to build the new OpenMP clause.
   /// Subclasses may override this routine to provide different behavior.
   OMPClause *RebuildOMPReplicatedClause(Expr *NumReplications,
-                                        Expr *Var,
-                                        Expr *Func,
-                                        OpenMPRedundancyConstraint Constraint,
-                                        Expr *ArraySize,
-                                        SmallVector<Expr *, 4> CopyInVars,
-                                        SmallVector<std::pair<Expr *, Expr*>, 4> CopyInArraySizes,
+                                        OpenMPReplicatedKeyword Constraint,
                                         SourceLocation StartLoc,
                                         SourceLocation LParenLoc,
                                         SourceLocation EndLoc) {
-    return getSema().ActOnOpenMPReplicatedClause(NumReplications, Var, Func, Constraint, ArraySize, CopyInVars, CopyInArraySizes, StartLoc, LParenLoc, EndLoc);
+    return getSema().ActOnOpenMPReplicatedClause(NumReplications, Constraint, StartLoc, LParenLoc, EndLoc);
   }
 
   /// Build a new OpenMP 'schedule' clause.
@@ -2095,6 +2090,31 @@ public:
                                                    EndLoc);
   }
 
+  OMPClause *RebuildOMPReplicaFirstprivateClause(ArrayRef<Expr *> VarList,
+                                          ArrayRef<std::pair<Expr *, Expr *>> VarDeepSizes,
+                                          SourceLocation StartLoc,
+                                          SourceLocation LParenLoc,
+                                          SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPReplicaFirstprivateClause(
+        VarList, VarDeepSizes, StartLoc, LParenLoc, EndLoc);
+  }
+
+  OMPClause *RebuildOMPReplicaPrivateClause(ArrayRef<Expr *> VarList,
+                                          ArrayRef<std::pair<Expr *, Expr *>> VarDeepSizes,
+                                          SourceLocation StartLoc,
+                                          SourceLocation LParenLoc,
+                                          SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPReplicaPrivateClause(
+        VarList, VarDeepSizes, StartLoc, LParenLoc, EndLoc);
+  }
+
+  OMPClause *RebuildOMPConsolidationClause(ArrayRef<std::pair<Expr *, Expr *>> VarFunc,
+                                          SourceLocation StartLoc,
+                                          SourceLocation LParenLoc,
+                                          SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPConsolidationClause(
+        VarFunc, StartLoc, LParenLoc, EndLoc);
+  }
   /// Build a new OpenMP 'lastprivate' clause.
   ///
   /// By default, performs semantic analysis to build the new OpenMP clause.
@@ -10061,14 +10081,11 @@ template <typename Derived>
 OMPClause *
 TreeTransform<Derived>::TransformOMPReplicatedClause(OMPReplicatedClause *C) {
   ExprResult NumReplications = getDerived().TransformExpr(C->getNumReplications());
-  ExprResult Var = getDerived().TransformExpr(C->getVar());
-  ExprResult Func = getDerived().TransformExpr(C->getFunc());
-  OpenMPRedundancyConstraint Constraint = C->getRedundancyConstraint();
-  ExprResult ArraySize = getDerived().TransformExpr(C->getArraySize());
-  if (NumReplications.isInvalid() || Var.isInvalid() || Func.isInvalid() || ArraySize.isInvalid())
+  OpenMPReplicatedKeyword Constraint = C->getReplicatedKeyword();
+  if (NumReplications.isInvalid())
     return nullptr;
   return getDerived().RebuildOMPReplicatedClause(
-      NumReplications.get(), Var.get(), Func.get(), Constraint, ArraySize.get(), C->getCopyInVars(), C->getCopyInArraySizes(), C->getBeginLoc(), C->getLParenLoc(), C->getEndLoc());
+      NumReplications.get(), Constraint, C->getBeginLoc(), C->getLParenLoc(), C->getEndLoc());
 }
 
 template <typename Derived>
@@ -10388,6 +10405,30 @@ OMPClause *TreeTransform<Derived>::TransformOMPFirstprivateClause(
   }
   return getDerived().RebuildOMPFirstprivateClause(
       Vars, C->getBeginLoc(), C->getLParenLoc(), C->getEndLoc());
+}
+
+template <typename Derived>
+OMPClause *TreeTransform<Derived>::TransformOMPReplicaFirstprivateClause(
+    OMPReplicaFirstprivateClause *C) {
+  return getDerived().RebuildOMPReplicaFirstprivateClause(
+      C->getVarList(), C->getVarDeepSizes(), C->getBeginLoc(),
+      C->getLParenLoc(), C->getEndLoc());
+}
+
+template <typename Derived>
+OMPClause *TreeTransform<Derived>::TransformOMPReplicaPrivateClause(
+    OMPReplicaPrivateClause *C) {
+  return getDerived().RebuildOMPReplicaPrivateClause(
+      C->getVarList(), C->getVarDeepSizes(), C->getBeginLoc(),
+      C->getLParenLoc(), C->getEndLoc());
+}
+
+template <typename Derived>
+OMPClause *TreeTransform<Derived>::TransformOMPConsolidationClause(
+    OMPConsolidationClause *C) {
+  return getDerived().RebuildOMPConsolidationClause(
+      C->getVarFunc(), C->getBeginLoc(),
+      C->getLParenLoc(), C->getEndLoc());
 }
 
 template <typename Derived>

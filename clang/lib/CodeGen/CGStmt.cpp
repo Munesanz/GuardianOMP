@@ -2952,9 +2952,8 @@ Address CodeGenFunction::GenerateCapturedStmtArgument(const CapturedStmt &S) {
   return CapStruct.getAddress(*this);
 }
 
-Address
-CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
-    const CapturedStmt &S, Expr *VarToReplicate, const OMPReplicatedClause *ReplicatedClause, SmallVector<llvm::Value *,4> &AllocatedVars) {
+Address CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
+    const CapturedStmt &S, const OMPReplicatedClause *ReplicatedClause, const OMPTaskDirective &D, OMPTaskDataTy &Data) {
   const RecordDecl *RD = S.getCapturedRecordDecl();
   QualType RecordTy = getContext().getRecordType(RD);
   llvm::Value *AllocatedVariable = nullptr;
@@ -2964,6 +2963,58 @@ CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
       MakeAddrLValue(CreateMemTemp(RecordTy, "agg.captured"), RecordTy);
 
   RecordDecl::field_iterator CurField = RD->field_begin();
+
+  llvm::SmallVector<std::pair<Expr *,int>> Vars;
+  llvm::SmallVector<Expr *> FirstPrivateVars;
+  llvm::SmallVector<Expr *> PrivateVars;
+
+  llvm::SmallVector<std::pair<Expr *,Expr *>> VarsDeepSizes;
+  llvm::SmallVector<std::pair<Expr *,Expr *>> FirstPrivateVarsDeepSizes;
+  llvm::SmallVector<std::pair<Expr *,Expr *>> PrivateVarsDeepSizes;
+
+  for (const OMPClause *Clause : D.clauses()) {
+    if (const OMPReplicaFirstprivateClause *ReplicaFirstprivate =
+            dyn_cast<OMPReplicaFirstprivateClause>(Clause)) {
+      for (int i = 0; i < (int)ReplicaFirstprivate->getVarList().size(); i++)
+        FirstPrivateVars.push_back(ReplicaFirstprivate->getVarList()[i]);
+      for (int i = 0; i < (int)ReplicaFirstprivate->getVarDeepSizes().size();
+           i++)
+        FirstPrivateVarsDeepSizes.push_back(
+            ReplicaFirstprivate->getVarDeepSizes()[i]);
+    }
+    if (const OMPReplicaPrivateClause *ReplicaPrivate =
+            dyn_cast<OMPReplicaPrivateClause>(Clause)) {
+      for (int i = 0; i < (int)ReplicaPrivate->getVarList().size(); i++)
+        PrivateVars.push_back(ReplicaPrivate->getVarList()[i]);
+      for (int i = 0; i < (int)ReplicaPrivate->getVarDeepSizes().size(); i++)
+        PrivateVarsDeepSizes.push_back(ReplicaPrivate->getVarDeepSizes()[i]);
+    }
+  }
+
+  for(int i = 0;  i < (int) FirstPrivateVars.size(); i++){
+    Vars.push_back(std::pair(FirstPrivateVars[i], 1));
+    VarsDeepSizes.push_back(FirstPrivateVarsDeepSizes[i]);
+  }
+
+  for(int i = 0; i<  (int) PrivateVars.size(); i++){
+    int found =0;
+    const auto *DRE1 = dyn_cast<DeclRefExpr>(PrivateVars[i]);
+    for(int j = 0; j < (int) Vars.size(); j++){
+      const auto *DRE2 = dyn_cast<DeclRefExpr>(Vars[j].first);
+      if(DRE1->getDecl()==DRE2->getDecl()){
+        found = 1;
+      }
+    }
+    if(found!=1){
+      Vars.push_back(std::pair(PrivateVars[i], 0));
+      VarsDeepSizes.push_back(PrivateVarsDeepSizes[i]);
+    }
+  }
+
+  SmallVector<llvm::Value *> AllocatedVars;
+  for( int i = 0; i < (int) Vars.size(); i++){
+    AllocatedVars.push_back(nullptr);
+  }
   for (CapturedStmt::const_capture_init_iterator I = S.capture_init_begin(),
                                                  E = S.capture_init_end();
        I != E; ++I, ++CurField) {
@@ -2972,23 +3023,20 @@ CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
       EmitLambdaVLACapture(CurField->getCapturedVLAType(), LV);
     } else {
       const auto *DRE1 = dyn_cast<DeclRefExpr>(*I);
-      SmallVector<Expr *, 4> CopyInVars = ReplicatedClause->getCopyInVars();
-      SmallVector<std::pair<Expr *, Expr*>, 4> CopyInArraySizes =
-          ReplicatedClause->getCopyInArraySizes();
-      CopyInVars.push_back(VarToReplicate);
-      CopyInArraySizes.push_back(std::make_pair(ReplicatedClause->getArraySize(), nullptr));
       int found = 0;
-      for (int i = 0; i < (int) CopyInVars.size(); i++) {
-        const auto *DRE2 = dyn_cast<DeclRefExpr>(CopyInVars[i]);
-        LValue OriginalLValue = EmitLValue(CopyInVars[i]);
+      for (int i = 0; i < (int)Vars.size(); i++) {
+        Expr *VarToReplicate = Vars[i].first;
+        const auto *DRE2 = dyn_cast<DeclRefExpr>(VarToReplicate);
+        LValue OriginalLValue = EmitLValue(VarToReplicate);
         llvm::Value *OriginalVarPointer = OriginalLValue.getPointer(*this);
         llvm::Value *OriginalVarValue =
             Builder.CreateLoad(OriginalLValue.getAddress(*this));
+
         if (DRE1 && DRE2 && DRE1->getDecl() == DRE2->getDecl()) {
           found = 1;
-
-          Expr *ArraySizeExpr = CopyInArraySizes[i].first;
+          Expr *ArraySizeExpr = VarsDeepSizes[i].first;
           llvm::Value *ArraySizeValue = nullptr;
+          llvm::Value *SecondArraySizeValue = nullptr;
           if (ArraySizeExpr) {
             ArraySizeValue = EmitAnyExpr(ArraySizeExpr).getScalarVal();
             ArraySizeValue = Builder.CreateZExt(ArraySizeValue, Int64Ty);
@@ -2996,45 +3044,50 @@ CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
             ArraySizeValue = llvm::ConstantInt::get(Int64Ty, 0);
           }
 
-          Expr *SecondSizeExpr = CopyInArraySizes[i].second;
-          llvm::Value *SecondSizeValue = nullptr;
-          if (SecondSizeExpr) {
-            SecondSizeValue = EmitAnyExpr(SecondSizeExpr).getScalarVal();
-            SecondSizeValue = Builder.CreateZExt(SecondSizeValue, Int64Ty);
+          ArraySizeExpr = VarsDeepSizes[i].second;
+          if (ArraySizeExpr) {
+            SecondArraySizeValue = EmitAnyExpr(ArraySizeExpr).getScalarVal();
+            SecondArraySizeValue = Builder.CreateZExt(ArraySizeValue, Int64Ty);
           } else {
-            SecondSizeValue = llvm::ConstantInt::get(Int64Ty, 0);
+            SecondArraySizeValue = llvm::ConstantInt::get(Int64Ty, 0);
           }
 
           const llvm::DataLayout &dataLayout = CGM.getModule().getDataLayout();
           llvm::Value *ReplicateArgs[] = {
-              OriginalVarPointer, llvm::ConstantInt::get(Int64Ty, 0),
+              OriginalVarPointer,
+              llvm::ConstantInt::get(Int64Ty, 0),
               llvm::ConstantInt::get(Int32Ty, 0),
               llvm::ConstantInt::get(
                   (llvm::Type::getInt32Ty(CGM.getModule().getContext())),
                   dataLayout.getTypeAllocSize(OriginalVarValue->getType())),
-              ArraySizeValue, SecondSizeValue,
-              llvm::ConstantInt::get(Int32Ty, i)};
+              ArraySizeValue,
+              SecondArraySizeValue,
+              llvm::ConstantInt::get(Int32Ty, i),
+              llvm::ConstantInt::get(Int32Ty, Vars[i].second)};
 
           llvm::FunctionCallee replicateVariableFunc =
               CGM.getModule().getOrInsertFunction(
                   "__kmpc_set_replicate_variable",
-                  llvm::FunctionType::get(CGM.Int8PtrTy,
-                                          {CGM.Int8PtrTy, CGM.Int64Ty,
-                                           CGM.Int32Ty, CGM.Int32Ty,
-                                           CGM.Int64Ty, CGM.Int64Ty, CGM.Int32Ty},
-                                          false));
+                  llvm::FunctionType::get(
+                      CGM.Int8PtrTy,
+                      {CGM.Int8PtrTy, CGM.Int64Ty, CGM.Int32Ty, CGM.Int32Ty,
+                       CGM.Int64Ty, CGM.Int64Ty, CGM.Int32Ty, CGM.Int32Ty},
+                      false));
 
           AllocatedVariable =
               Builder.CreateCall(replicateVariableFunc, ReplicateArgs);
           AllocatedVars[i] = AllocatedVariable;
-          auto *store =
-              Builder.CreateStore(AllocatedVariable, LV.getAddress(*this));
+          Builder.CreateStore(AllocatedVariable, LV.getAddress(*this));
         }
       }
-      if (!found)
+      if (!found){
         EmitInitializerForField(*CurField, LV, *I);
+      }
     }
   }
+  Data.AllocatedVars = AllocatedVars;
+  Data.ProcessedVars = Vars;
+  Data.ProcessedVarsDeepSizes = VarsDeepSizes;
   return SlotLV.getAddress(*this);
 }
 

@@ -3336,9 +3336,6 @@ template <typename Derived>
 bool RecursiveASTVisitor<Derived>::VisitOMPReplicatedClause(
     OMPReplicatedClause *C) {
   TRY_TO(TraverseStmt(C->getNumReplications()));
-  TRY_TO(TraverseStmt(C->getVar()));
-  TRY_TO(TraverseStmt(C->getFunc()));
-  TRY_TO(TraverseStmt(C->getArraySize()));
   return true;
 }
 
@@ -3559,6 +3556,42 @@ bool RecursiveASTVisitor<Derived>::VisitOMPFirstprivateClause(
   }
   for (auto *E : C->inits()) {
     TRY_TO(TraverseStmt(E));
+  }
+  return true;
+}
+
+template <typename Derived>
+bool RecursiveASTVisitor<Derived>::VisitOMPReplicaFirstprivateClause(
+    OMPReplicaFirstprivateClause *C) {
+  for (auto *E : C->getVarList()){
+      TRY_TO(TraverseStmt(E));
+  }
+  for (auto E : C->getVarDeepSizes()){
+      TRY_TO(TraverseStmt(E.first));
+      TRY_TO(TraverseStmt(E.second));
+  }
+  return true;
+}
+
+template <typename Derived>
+bool RecursiveASTVisitor<Derived>::VisitOMPReplicaPrivateClause(
+    OMPReplicaPrivateClause *C) {
+  for (auto *E : C->getVarList()){
+      TRY_TO(TraverseStmt(E));
+  }
+  for (auto E : C->getVarDeepSizes()){
+      TRY_TO(TraverseStmt(E.first));
+      TRY_TO(TraverseStmt(E.second));
+  }
+  return true;
+}
+
+template <typename Derived>
+bool RecursiveASTVisitor<Derived>::VisitOMPConsolidationClause(
+    OMPConsolidationClause *C) {
+  for (auto E : C->getVarFunc()){
+      TRY_TO(TraverseStmt(E.first));
+      TRY_TO(TraverseStmt(E.second));
   }
   return true;
 }

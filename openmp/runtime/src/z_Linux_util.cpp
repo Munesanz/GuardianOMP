@@ -1087,7 +1087,6 @@ static void __kmp_team_handler(int signo) {
       if (__kmp_debug_buf) {
         __kmp_dump_debug_buffer();
       }
-      printf("Unregister!! \n");
       __kmp_unregister_library(); // cleanup shared memory
       KMP_MB(); // Flush all pending memory write invalidates.
       TCW_4(__kmp_global.g.g_abort, signo);

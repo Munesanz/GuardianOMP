@@ -1318,7 +1318,7 @@ public:
 /// directive.
 ///
 /// \code
-/// #pragma omp task replicated(2, a, func)
+/// #pragma omp task replicated(num_replicas, constraint)
 /// \endcode
 /// In this example directive '#pragma omp task' has simple 'replicated'
 /// clause with number of 2 replications of variable "a" and check function "func".
@@ -1330,56 +1330,33 @@ class OMPReplicatedClause : public OMPClause{
   /// Condition of the 'replicated' clause.
   Stmt *NumReplications = nullptr;
 
-  // Variable to replicate and check
-  Stmt *Var = nullptr;
-
-  // Function to check correctness
-  Stmt *Func = nullptr;
-
   // Redundancy constraint
-  OpenMPRedundancyConstraint Constraint = OMPC_REDUNDANCY_CONSTRAINT_none;
+  OpenMPReplicatedKeyword Constraint = OMPC_REPLICATED_KEYWORD_none;
 
-  // Array size to copy
-  Stmt *ArraySize = nullptr;
 
   SmallVector<Expr *, 4> DummyVars;
-
-  SmallVector<Expr *, 4> CopyInVars;
-  SmallVector<std::pair<Expr *, Expr*>, 4> CopyInArraySizes;
-
   /// Set conditions.
   void setNumReplications(Expr *NReplications) {
     NumReplications = NReplications;
   }
 
-  void setVar(Expr *NVar) { Var = NVar; }
-
-  void setFunc(Expr *NFunc) { Func = NFunc; }
-
-  void setArraySize(Expr *ASize) { ArraySize = ASize; }
-
-  void setRedundancyConstraint(OpenMPRedundancyConstraint C) { Constraint = C;}
-
+  void setReplicatedKeyword(OpenMPReplicatedKeyword C) { Constraint = C;}
 public:
   /// Build 'replicated' clause
   ///
   /// \param NumReplications Number of replications for the construct.
-  /// \param Var Variable replicated for the construct.
-  /// \param Func Function to check.
   /// \param C Replication constraint.
-  /// \param ASize Size of the array to copy.
   /// \param HelperReplications Helper replications for the construct.
   /// \param CaptureRegion Innermost OpenMP region where expressions in this
   /// clause must be captured.
   /// \param StartLoc Starting location of the clause.
   /// \param LParenLoc Location of '('.
   /// \param EndLoc Ending location of the clause.
-  OMPReplicatedClause(Expr *NumReplications, Expr *Var, Expr *Func,
-                      OpenMPRedundancyConstraint C, Expr *ASize, SourceLocation StartLoc,
+  OMPReplicatedClause(Expr *NumReplications,
+                      OpenMPReplicatedKeyword C, SourceLocation StartLoc,
                       SourceLocation LParenLoc, SourceLocation EndLoc)
       : OMPClause(llvm::omp::OMPC_replicated, StartLoc, EndLoc),
-        LParenLoc(LParenLoc), NumReplications(NumReplications), Var(Var),
-        Func(Func), Constraint(C), ArraySize(ASize) {}
+        LParenLoc(LParenLoc), NumReplications(NumReplications), Constraint(C) {}
 
   /// Build an empty clause.
   OMPReplicatedClause()
@@ -1396,27 +1373,13 @@ public:
     return cast_or_null<Expr>(NumReplications);
   }
 
-  void setCopyInVars(SmallVector<Expr *, 4> CopyVars){ CopyInVars = CopyVars;}
-
-  void setCopyInArraySizes(SmallVector<std::pair<Expr *, Expr*>, 4> CopyArraySizes){ CopyInArraySizes = CopyArraySizes;}
-  
   void addDummyVar(Expr *e) { DummyVars.push_back(e); }
 
   void cleanDummyVars() { DummyVars.clear(); }
 
   ArrayRef<Expr *> getDummyVars() const { return DummyVars; }
 
-  Expr *getVar() const { return cast_or_null<Expr>(Var); }
-
-  Expr *getFunc() const { return cast_or_null<Expr>(Func); }
-
-  Expr *getArraySize() const { return cast_or_null<Expr>(ArraySize); }
-
-  OpenMPRedundancyConstraint getRedundancyConstraint() const { return Constraint;}
-
-  SmallVector<Expr *, 4> getCopyInVars() const { return CopyInVars;}
-
-  SmallVector<std::pair<Expr *, Expr*>, 4> getCopyInArraySizes() const { return CopyInArraySizes;}
+  OpenMPReplicatedKeyword getReplicatedKeyword() const { return Constraint;}
 
   child_range children() {
     return child_range(&NumReplications, &NumReplications + 1);
@@ -3034,6 +2997,145 @@ public:
 
   static bool classof(const OMPClause *T) {
     return T->getClauseKind() == llvm::omp::OMPC_firstprivate;
+  }
+};
+
+class OMPReplicaFirstprivateClause : public OMPClause {
+  friend class OMPClauseReader;
+  SmallVector<Expr *> varList;
+  SmallVector<std::pair<Expr *, Expr *>> varDeepSizes;
+  SourceLocation LParenLoc;
+
+public:
+  OMPReplicaFirstprivateClause(
+      ArrayRef<Expr *> varList,
+      ArrayRef<std::pair<Expr *, Expr *>> varDeepSizes,
+      SourceLocation StartLoc, SourceLocation LParenLoc,
+      SourceLocation EndLoc)
+      : OMPClause(llvm::omp::OMPC_replica_firstprivate, StartLoc, EndLoc),
+        varList(varList), varDeepSizes(varDeepSizes), LParenLoc(LParenLoc) {}
+
+  /// Build an empty clause.
+  OMPReplicaFirstprivateClause()
+      : OMPClause(llvm::omp::OMPC_replica_firstprivate, SourceLocation(),
+                  SourceLocation()) {}
+
+  ArrayRef<Expr *>  getVarList() const { return varList;}
+
+  ArrayRef<std::pair<Expr *, Expr *>>  getVarDeepSizes() const { return varDeepSizes;}
+  /// Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+
+  /// Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+
+  const_child_range children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+
+  child_range used_children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+  const_child_range used_children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == llvm::omp::OMPC_replica_firstprivate;
+  }
+};
+
+class OMPReplicaPrivateClause : public OMPClause {
+  friend class OMPClauseReader;
+  SmallVector<Expr *> varList;
+  SmallVector<std::pair<Expr *, Expr *>> varDeepSizes;
+  SourceLocation LParenLoc;
+
+public:
+  OMPReplicaPrivateClause(
+      ArrayRef<Expr *> varList,
+      ArrayRef<std::pair<Expr *, Expr *>> varDeepSizes,
+      SourceLocation StartLoc, SourceLocation LParenLoc,
+      SourceLocation EndLoc)
+      : OMPClause(llvm::omp::OMPC_replica_private, StartLoc, EndLoc),
+        varList(varList), varDeepSizes(varDeepSizes), LParenLoc(LParenLoc) {}
+
+  /// Build an empty clause.
+  OMPReplicaPrivateClause()
+      : OMPClause(llvm::omp::OMPC_replica_private, SourceLocation(),
+                  SourceLocation()) {}
+
+  ArrayRef<Expr *>  getVarList() const { return varList;}
+
+  ArrayRef<std::pair<Expr *, Expr *>>  getVarDeepSizes() const { return varDeepSizes;}
+  /// Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+
+  /// Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+
+  const_child_range children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+
+  child_range used_children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+  const_child_range used_children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == llvm::omp::OMPC_replica_private;
+  }
+};
+
+class OMPConsolidationClause : public OMPClause {
+  friend class OMPClauseReader;
+  SmallVector<std::pair<Expr *, Expr *>> varFunc;
+  SourceLocation LParenLoc;
+public:
+  OMPConsolidationClause(
+      ArrayRef<std::pair<Expr *, Expr *>> varFunc,
+      SourceLocation StartLoc, SourceLocation LParenLoc,
+      SourceLocation EndLoc)
+      : OMPClause(llvm::omp::OMPC_consolidation, StartLoc, EndLoc),
+      varFunc(varFunc), LParenLoc(LParenLoc) {}
+
+  /// Build an empty clause.
+  OMPConsolidationClause()
+      : OMPClause(llvm::omp::OMPC_consolidation, SourceLocation(),
+                  SourceLocation()) {}
+
+  ArrayRef<std::pair<Expr *, Expr *>>  getVarFunc() const { return varFunc;}
+  /// Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+
+  /// Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+
+  const_child_range children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+
+  child_range used_children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+  const_child_range used_children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == llvm::omp::OMPC_consolidation;
   }
 };
 

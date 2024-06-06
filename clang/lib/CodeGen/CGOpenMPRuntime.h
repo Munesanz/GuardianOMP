@@ -132,7 +132,10 @@ struct OMPTaskDataTy final {
   llvm::Value *GroupID = nullptr;
   int ReplicaID = -1;
   int PragmaID = -1;
-  SmallVector<llvm::Value *, 4> AllocatedVars;
+  SmallVector <llvm::Value *> AllocatedVars;
+  SmallVector<std::pair<Expr *, int>> ProcessedVars;
+  SmallVector<std::pair<Expr *,Expr *>> ProcessedVarsDeepSizes;
+
   bool HasNowaitClause = false;
 };
 
@@ -1152,11 +1155,6 @@ public:
                             Address Shareds, const Expr *IfCond,
                             const OMPTaskDataTy &Data);
 
-  virtual void
-  emitTaskReplicasCallback(CodeGenFunction &CGF, SourceLocation Loc,
-                           const OMPExecutableDirective &D, Expr *FuncToCall,
-                           llvm::Value *OriginalVar, llvm::Value *GroupID);
-
   virtual llvm::Value *
   emitGetNewGroupID(CodeGenFunction &CGF, SourceLocation Loc);
 
@@ -1995,11 +1993,6 @@ public:
                     llvm::Function *TaskFunction, QualType SharedsTy,
                     Address Shareds, const Expr *IfCond,
                     const OMPTaskDataTy &Data) override;
-
-  void emitTaskReplicasCallback(CodeGenFunction &CGF, SourceLocation Loc,
-                                const OMPExecutableDirective &D,
-                                Expr *FuncToCall, llvm::Value *OriginalVar,
-                                llvm::Value *GroupID) override;
 
   llvm::Value *emitGetNewGroupID(CodeGenFunction &CGF, SourceLocation Loc) override;
 

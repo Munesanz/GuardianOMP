@@ -10463,12 +10463,9 @@ void OMPClauseReader::VisitOMPNumPreallocsClause(OMPNumPreallocsClause *C) {
 
 void OMPClauseReader::VisitOMPReplicatedClause(OMPReplicatedClause *C) {
   C->setNumReplications(Record.readSubExpr());
-  C->setVar(Record.readSubExpr());
-  C->setFunc(Record.readSubExpr());
   C->setLParenLoc(Record.readSourceLocation());
-  C->setRedundancyConstraint(
-       static_cast<OpenMPRedundancyConstraint>(Record.readInt()));
-  C->setArraySize(Record.readSubExpr());
+  C->setReplicatedKeyword(
+       static_cast<OpenMPReplicatedKeyword>(Record.readInt()));
 }
 
 void OMPClauseReader::VisitOMPScheduleClause(OMPScheduleClause *C) {
@@ -10643,6 +10640,33 @@ void OMPClauseReader::VisitOMPFirstprivateClause(OMPFirstprivateClause *C) {
   for (unsigned i = 0; i != NumVars; ++i)
     Vars.push_back(Record.readSubExpr());
   C->setInits(Vars);
+}
+
+//TODO: Implement set
+void OMPClauseReader::VisitOMPReplicaFirstprivateClause(OMPReplicaFirstprivateClause *C) {
+    C->setLParenLoc(Record.readSourceLocation());
+    SmallVector<Expr *, 16> Vars;
+    for (auto *E : C->getVarList()){
+      Vars.push_back(E);
+    }
+}
+
+//TODO: Implement set
+void OMPClauseReader::VisitOMPReplicaPrivateClause(OMPReplicaPrivateClause *C) {
+    C->setLParenLoc(Record.readSourceLocation());
+    SmallVector<Expr *, 16> Vars;
+    for (auto *E : C->getVarList()){
+      Vars.push_back(E);
+    }
+}
+
+//TODO: Implement set
+void OMPClauseReader::VisitOMPConsolidationClause(OMPConsolidationClause *C) {
+    C->setLParenLoc(Record.readSourceLocation());
+    SmallVector<std::pair<Expr *, Expr *>> VarFunc;
+    for (auto E : C->getVarFunc()){
+      VarFunc.push_back(E);
+    }
 }
 
 void OMPClauseReader::VisitOMPLastprivateClause(OMPLastprivateClause *C) {

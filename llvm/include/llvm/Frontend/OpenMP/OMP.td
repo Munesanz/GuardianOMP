@@ -84,6 +84,18 @@ def OMPC_FirstPrivate : Clause<"firstprivate"> {
   let clangClass = "OMPFirstprivateClause";
   let flangClass = "OmpObjectList";
 }
+def OMPC_ReplicaFirstPrivate : Clause<"replica_firstprivate"> {
+  let clangClass = "OMPReplicaFirstprivateClause";
+  let flangClass = "ScalarIntConstantExpr";
+}
+def OMPC_ReplicaPrivate : Clause<"replica_private"> {
+  let clangClass = "OMPReplicaPrivateClause";
+  let flangClass = "ScalarIntConstantExpr";
+}
+def OMPC_Consolidation : Clause<"consolidation"> {
+  let clangClass = "OMPConsolidationClause";
+  let flangClass = "ScalarIntConstantExpr";
+}
 def OMPC_LastPrivate : Clause<"lastprivate"> {
   let clangClass = "OMPLastprivateClause";
   let flangClass = "OmpObjectList";
@@ -502,7 +514,10 @@ def OMP_Task : Directive<"task"> {
     VersionedClause<OMPC_If>,
     VersionedClause<OMPC_Final>,
     VersionedClause<OMPC_Priority>,
-    VersionedClause<OMPC_Replicated>
+    VersionedClause<OMPC_Replicated>,
+    VersionedClause<OMPC_ReplicaFirstPrivate>,
+    VersionedClause<OMPC_ReplicaPrivate>,
+    VersionedClause<OMPC_Consolidation>,
   ];
 }
 def OMP_Simd : Directive<"simd"> {
