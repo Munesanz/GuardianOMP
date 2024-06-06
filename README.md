@@ -34,12 +34,12 @@ First, global data offsets and sizes of a binary can be extracted using "extract
 ./extract_object_file.sh binary
 ```
 
-It will generate a file named "object_file.txt" containing all the offsets and sizes of global data. This file is read by the fault injector tool.
+It will generate a file named "object_file.txt" containing all the offsets and sizes of global data. This file is read by FaultSim.
 
-Then, to enable fault injection employ LD_PRELOAD env var:
+Then, to enable it employ LD_PRELOAD env var:
 
 ```sh
 LD_PRELOAD=fault_sim.so DELAY_TIME=1000 ./binary
 ```
 
-Available env vars are: DELAY_TIME (miliseconds), MODE ("REGISER", "MEMORY" or "RANDOM), MEMORY_REGIONS ("HEAP", "DATA" or "STACK), REGISTERS and NUM_BITFLIPS.
+Others available env vars are: DELAY_TIME (miliseconds), MODE ("REGISTER", "MEMORY" or "RANDOM"), MEMORY_REGIONS ("HEAP", "DATA" or "STACK), REGISTERS and NUM_BITFLIPS.
